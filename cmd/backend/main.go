@@ -18,6 +18,7 @@ import (
 	"mangahub/internal/config"
 	"mangahub/internal/store"
 	"mangahub/internal/tcpsync"
+	"mangahub/internal/udpnotify"
 )
 
 func main() {
@@ -54,6 +55,13 @@ func main() {
 		}
 	}()
 
+	notifier := udpnotify.New(verify, udpnotify.DefaultTTL)
+	go func() {
+		if err := notifier.ListenAndServe(cfg.UDPAddr); err != nil {
+			log.Fatalf("udp %s: %v", cfg.UDPAddr, err)
+		}
+	}()
+
 	router := api.NewRouter(api.Deps{
 		Store:   st,
 		Auth:    jwt,
@@ -77,4 +85,5 @@ func main() {
 	defer cancel()
 	httpSrv.Shutdown(ctx)
 	tcpSrv.Close()
+	notifier.Close()
 }
