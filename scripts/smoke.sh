@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# HTTP smoke test against a RUNNING backend (+ catalog for the manga part).
+#   ./scripts/smoke.sh            # full run
+#   ./scripts/smoke.sh auth       # auth part only (no catalog needed)
+# Env: MANGAHUB_HTTP (default http://localhost:8080), ADMIN_KEY (default dev-admin-key)
+set -uo pipefail
+
+BASE="${MANGAHUB_HTTP:-http://localhost:8080}"
+ADMIN_KEY="${ADMIN_KEY:-dev-admin-key}"
+ONLY="${1:-all}"
+USER1="smoke$RANDOM$RANDOM"
+USER2="smoke$RANDOM$RANDOM"
+PASS=0
+FAIL=0
+
+command -v jq >/dev/null || { echo "jq is required"; exit 2; }
+
+# req METHOD PATH [BODY] [extra curl args...] → sets CODE and BODY
+req() {
+  local method=$1 path=$2 body=${3:-}
+  shift 3 2>/dev/null || shift $#
+  local out
+  out=$(curl -sS -m 5 -w $'\n%{http_code}' -X "$method" "$BASE$path" \
+        -H 'Content-Type: application/json' ${body:+-d "$body"} "$@") || { CODE=000; BODY=""; return; }
+  CODE=${out##*$'\n'}
+  BODY=${out%$'\n'*}
+}
+
+check() { # check NAME EXPECTED_CODE
+  if [[ "$CODE" == "$2" ]]; then
+    PASS=$((PASS + 1)); printf '  ok   %-45s %s\n' "$1" "$CODE"
+  else
+    FAIL=$((FAIL + 1)); printf '  FAIL %-45s got %s want %s  %s\n' "$1" "$CODE" "$2" "$BODY"
+  fi
+}
+
+echo "== backend $BASE"
+req GET /api/health;                                                   check "health" 200
+
+echo "== F01 auth"
+CRED="{\"username\":\"$USER1\",\"password\":\"secret123\"}"
+req POST /api/auth/register "$CRED";                                   check "register" 201
+req POST /api/auth/register "$CRED";                                   check "register duplicate" 409
+req POST /api/auth/register '{"username":"x","password":"1"}';        check "register invalid" 400
+req POST /api/auth/login "{\"username\":\"$USER1\",\"password\":\"wrong-pw\"}"; check "login wrong password" 401
+req POST /api/auth/login "$CRED";                                      check "login" 200
+TOKEN=$(jq -r .token <<<"$BODY")
+AUTH=(-H "Authorization: Bearer $TOKEN")
+req GET /api/me "";                                                    check "me without token" 401
+req GET /api/me "" "${AUTH[@]}";                                       check "me with token" 200
+
+
+echo "== result: $PASS passed, $FAIL failed"
+[[ $FAIL -eq 0 ]]
