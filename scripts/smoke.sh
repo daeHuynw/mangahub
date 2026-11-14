@@ -59,6 +59,25 @@ if [[ "$ONLY" != "auth" ]]; then
   TOTAL=$(jq -r .total_chapters <<<"$BODY")
   req GET /api/manga/does-not-exist "" "${AUTH[@]}";                   check "detail unknown" 404
 
+  echo "== F03 library"
+  req POST /api/library '{"manga_id":"one-piece"}' "${AUTH[@]}";       check "add to library" 201
+  req POST /api/library '{"manga_id":"one-piece"}' "${AUTH[@]}";       check "add duplicate" 409
+  req POST /api/library '{"manga_id":"nope-nope"}' "${AUTH[@]}";       check "add unknown manga" 404
+  req PUT /api/library/one-piece/progress '{"current_chapter":25,"status":"reading"}' "${AUTH[@]}"; check "progress 25" 200
+  echo "       version: $(jq -r .version <<<"$BODY")"
+  req PUT /api/library/one-piece/progress '{"current_chapter":99999}' "${AUTH[@]}"; check "progress 99999 (> $TOTAL)" 400
+  req GET /api/library "" "${AUTH[@]}";                                check "list library" 200
+  req GET /api/library "";                                             check "list library without token" 401
+
+  echo "== isolation"
+  CRED2="{\"username\":\"$USER2\",\"password\":\"secret123\"}"
+  req POST /api/auth/register "$CRED2";                                check "register user 2" 201
+  req POST /api/auth/login "$CRED2"
+  AUTH2=(-H "Authorization: Bearer $(jq -r .token <<<"$BODY")")
+  req GET /api/library "" "${AUTH2[@]}";                               check "user 2 library" 200
+  [[ "$(jq '.items | length' <<<"$BODY")" == 0 ]] && echo "       user 2 sees 0 items (isolated)" || { FAIL=$((FAIL+1)); echo "  FAIL user 2 sees user 1 data"; }
+  req PUT /api/library/one-piece/progress '{"current_chapter":3}' "${AUTH2[@]}"; check "user 2 edits user 1 entry" 404
+
 fi
 
 echo "== result: $PASS passed, $FAIL failed"

@@ -35,6 +35,9 @@ func NewRouter(d Deps) *gin.Engine {
 	authed.GET("/me", s.me)
 	authed.GET("/manga", s.searchManga)
 	authed.GET("/manga/:id", s.getManga)
+	authed.GET("/library", s.listLibrary)
+	authed.POST("/library", s.addToLibrary)
+	authed.PUT("/library/:mangaId/progress", s.updateProgress)
 
 	return r
 }
