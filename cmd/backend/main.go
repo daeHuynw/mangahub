@@ -13,8 +13,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/redis/go-redis/v9"
+
 	"mangahub/internal/api"
 	"mangahub/internal/auth"
+	"mangahub/internal/cache"
 	"mangahub/internal/config"
 	"mangahub/internal/store"
 	"mangahub/internal/tcpsync"
@@ -46,6 +49,18 @@ func main() {
 	}
 	defer grpcCatalog.Close()
 	var catalog api.Catalog = grpcCatalog
+
+	if cfg.RedisAddr != "" {
+		rdb := redis.NewClient(&redis.Options{Addr: cfg.RedisAddr})
+		defer rdb.Close()
+		pctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		if err := rdb.Ping(pctx).Err(); err != nil {
+			log.Printf("redis %s not reachable (%v): cache will fall back to gRPC until it is", cfg.RedisAddr, err)
+		}
+		cancel()
+		catalog = cache.New(grpcCatalog, rdb, cfg.CacheTTL)
+		log.Printf("redis cache enabled at %s, TTL %s", cfg.RedisAddr, cfg.CacheTTL)
+	}
 
 	hub := tcpsync.NewHub()
 	tcpSrv := tcpsync.NewServer(hub, verify)

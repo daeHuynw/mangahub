@@ -44,10 +44,22 @@ func (s *server) searchManga(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"items": items})
 }
 
-// GET /api/manga/:id → 200 Manga | 404 | 503
+// GET /api/manga/:id → 200 Manga (+X-Cache) | 404 | 503
 func (s *server) getManga(c *gin.Context) {
 	id := c.Param("id")
-	m, err := s.Catalog.Get(c.Request.Context(), id)
+	var (
+		m   Manga
+		err error
+	)
+	if cr, ok := s.Catalog.(CacheReporter); ok {
+		var st string
+		m, st, err = cr.GetWithStatus(c.Request.Context(), id)
+		if st != "" {
+			c.Header("X-Cache", st)
+		}
+	} else {
+		m, err = s.Catalog.Get(c.Request.Context(), id)
+	}
 	if err != nil {
 		catalogFail(c, err)
 		return

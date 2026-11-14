@@ -18,11 +18,18 @@ type Manga struct {
 }
 
 // Catalog is everything the HTTP layer needs from the catalog service.
-// GRPCCatalog is the real implementation; tests use a fake.
+// GRPCCatalog is the real implementation; the cache package wraps it; tests
+// use a fake.
 type Catalog interface {
 	Search(ctx context.Context, query string, limit int) ([]Manga, error)
 	Get(ctx context.Context, id string) (Manga, error)
 	UpdateChapters(ctx context.Context, id string, total int) (Manga, error)
+}
+
+// CacheReporter is optionally implemented by a caching Catalog so the handler
+// can expose X-Cache: HIT / MISS.
+type CacheReporter interface {
+	GetWithStatus(ctx context.Context, id string) (m Manga, cacheStatus string, err error)
 }
 
 // Catalog errors, independent of gRPC so handlers and tests don't import it.
