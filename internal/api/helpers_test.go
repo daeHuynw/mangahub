@@ -98,6 +98,20 @@ func (p *pushRec) SendToUser(uid int64, ev tcpsync.Event, except string) int {
 	return 1
 }
 
+type bcastRec struct {
+	mu    sync.Mutex
+	calls int
+	total int
+}
+
+func (b *bcastRec) Broadcast(_, _ string, total int) int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.calls++
+	b.total = total
+	return 2
+}
+
 // ---------------------------------------------------------------- harness
 
 type env struct {
@@ -105,15 +119,18 @@ type env struct {
 	router *gin.Engine
 	cat    *fakeCatalog
 	push   *pushRec
+	bcast  *bcastRec
 	dbPath string
 	store  *store.Store
 	jwt    *auth.Manager
 }
 
+const adminKey = "test-admin"
+
 func newEnv(t *testing.T) *env {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	e := &env{t: t, cat: newFakeCatalog(), push: &pushRec{},
+	e := &env{t: t, cat: newFakeCatalog(), push: &pushRec{}, bcast: &bcastRec{},
 		dbPath: filepath.Join(t.TempDir(), "backend.db"), jwt: auth.NewManager("test-secret", time.Hour)}
 	e.open()
 	t.Cleanup(func() { e.store.Close() })
@@ -126,7 +143,7 @@ func (e *env) open() {
 		e.t.Fatal(err)
 	}
 	e.store = st
-	e.router = NewRouter(Deps{Store: st, Auth: e.jwt, Catalog: e.cat, Sync: e.push})
+	e.router = NewRouter(Deps{Store: st, Auth: e.jwt, Catalog: e.cat, Sync: e.push, Notify: e.bcast, AdminKey: adminKey})
 }
 
 // restart simulates stopping and starting the backend on the same DB file.

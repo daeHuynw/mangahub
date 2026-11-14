@@ -63,10 +63,13 @@ func main() {
 	}()
 
 	router := api.NewRouter(api.Deps{
-		Store:   st,
-		Auth:    jwt,
-		Catalog: catalog,
-		Sync:    hub,
+		Store:    st,
+		Auth:     jwt,
+		Catalog:  catalog,
+		Sync:     hub,
+		Notify:   notifier,
+		AdminKey: cfg.AdminKey,
+		// WS: chat handler from internal/chat (member B) goes here.
 	})
 	httpSrv := &http.Server{Addr: cfg.HTTPAddr, Handler: router, ReadHeaderTimeout: 5 * time.Second}
 	go func() {

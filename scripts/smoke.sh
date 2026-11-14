@@ -78,6 +78,12 @@ if [[ "$ONLY" != "auth" ]]; then
   [[ "$(jq '.items | length' <<<"$BODY")" == 0 ]] && echo "       user 2 sees 0 items (isolated)" || { FAIL=$((FAIL+1)); echo "  FAIL user 2 sees user 1 data"; }
   req PUT /api/library/one-piece/progress '{"current_chapter":3}' "${AUTH2[@]}"; check "user 2 edits user 1 entry" 404
 
+  echo "== F04 admin release"
+  NEW=$((TOTAL + 1))
+  req POST /api/admin/manga/one-piece/release "{\"total_chapters\":$NEW}"; check "release without key" 403
+  req POST /api/admin/manga/one-piece/release "{\"total_chapters\":$NEW}" -H "X-Admin-Key: $ADMIN_KEY"; check "release $NEW" 200
+  echo "       notified: $(jq -r .notified <<<"$BODY")"
+  req POST /api/admin/manga/one-piece/release '{"total_chapters":1}' -H "X-Admin-Key: $ADMIN_KEY"; check "release decrease" 400
 fi
 
 echo "== result: $PASS passed, $FAIL failed"

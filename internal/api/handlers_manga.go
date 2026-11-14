@@ -54,3 +54,30 @@ func (s *server) getManga(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, m)
 }
+
+// POST /api/admin/manga/:id/release {"total_chapters": n}
+// → gRPC UpdateChapters → only if it succeeds, UDP broadcast.
+// 200 {"manga_id","total_chapters","notified"} | 400 | 403 | 404 | 503
+func (s *server) releaseChapter(c *gin.Context) {
+	var body struct {
+		TotalChapters *int `json:"total_chapters"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil || body.TotalChapters == nil {
+		fail(c, http.StatusBadRequest, "body must be {\"total_chapters\": <int>}")
+		return
+	}
+	if *body.TotalChapters < 0 {
+		fail(c, http.StatusBadRequest, "total_chapters must be >= 0")
+		return
+	}
+	m, err := s.Catalog.UpdateChapters(c.Request.Context(), c.Param("id"), *body.TotalChapters)
+	if err != nil {
+		catalogFail(c, err) // no broadcast on failure
+		return
+	}
+	notified := 0
+	if s.Notify != nil {
+		notified = s.Notify.Broadcast(m.ID, m.Title, m.TotalChapters)
+	}
+	c.JSON(http.StatusOK, gin.H{"manga_id": m.ID, "total_chapters": m.TotalChapters, "notified": notified})
+}
