@@ -49,6 +49,17 @@ AUTH=(-H "Authorization: Bearer $TOKEN")
 req GET /api/me "";                                                    check "me without token" 401
 req GET /api/me "" "${AUTH[@]}";                                       check "me with token" 200
 
+if [[ "$ONLY" != "auth" ]]; then
+  echo "== F02 manga (via gRPC catalog)"
+  req GET "/api/manga?q=piece" "" "${AUTH[@]}";                        check "search 'piece'" 200
+  echo "       found: $(jq -r '[.items[].title] | join(", ")' <<<"$BODY" 2>/dev/null)"
+  req GET "/api/manga?q=zzzzzz" "" "${AUTH[@]}";                       check "search no result" 200
+  [[ "$(jq '.items | length' <<<"$BODY")" == 0 ]] || { FAIL=$((FAIL+1)); echo "  FAIL empty search not []"; }
+  req GET /api/manga/one-piece "" "${AUTH[@]}";                        check "detail one-piece" 200
+  TOTAL=$(jq -r .total_chapters <<<"$BODY")
+  req GET /api/manga/does-not-exist "" "${AUTH[@]}";                   check "detail unknown" 404
+
+fi
 
 echo "== result: $PASS passed, $FAIL failed"
 [[ $FAIL -eq 0 ]]
