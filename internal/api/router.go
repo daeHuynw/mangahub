@@ -12,8 +12,9 @@ import (
 
 // Deps are the collaborators wired together in cmd/backend.
 type Deps struct {
-	Store *store.Store
-	Auth  *auth.Manager
+	Store   *store.Store
+	Auth    *auth.Manager
+	Catalog Catalog
 }
 
 type server struct{ Deps }
@@ -32,6 +33,8 @@ func NewRouter(d Deps) *gin.Engine {
 
 	authed := api.Group("", d.Auth.RequireAuth())
 	authed.GET("/me", s.me)
+	authed.GET("/manga", s.searchManga)
+	authed.GET("/manga/:id", s.getManga)
 
 	return r
 }

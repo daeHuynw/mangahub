@@ -1,4 +1,6 @@
-// Command backend runs the MangaHub Gin backend.
+// Command backend runs the MangaHub Gin backend: HTTP (+WebSocket route),
+// TCP progress sync and UDP notifications in one process. Catalog data comes
+// from the separate gRPC Catalog Service (cmd/catalog).
 package main
 
 import (
@@ -28,11 +30,19 @@ func main() {
 	defer st.Close()
 
 	jwt := auth.NewManager(cfg.JWTSecret, auth.DefaultTTL)
-
-	router := api.NewRouter(api.Deps{Store: st, Auth: jwt})
+	grpcCatalog, err := api.DialCatalog(cfg.CatalogAddr, cfg.CatalogTimeout)
+	if err != nil {
+		log.Fatalf("catalog: %v", err)
+	}
+	defer grpcCatalog.Close()
+	router := api.NewRouter(api.Deps{
+		Store:   st,
+		Auth:    jwt,
+		Catalog: grpcCatalog,
+	})
 	httpSrv := &http.Server{Addr: cfg.HTTPAddr, Handler: router, ReadHeaderTimeout: 5 * time.Second}
 	go func() {
-		log.Printf("http listening on %s", cfg.HTTPAddr)
+		log.Printf("http listening on %s (catalog %s, timeout %s)", cfg.HTTPAddr, cfg.CatalogAddr, cfg.CatalogTimeout)
 		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("http %s: %v", cfg.HTTPAddr, err)
 		}
