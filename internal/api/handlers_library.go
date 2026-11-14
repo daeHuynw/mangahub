@@ -11,6 +11,7 @@ import (
 
 	"mangahub/internal/auth"
 	"mangahub/internal/store"
+	"mangahub/internal/tcpsync"
 )
 
 // LibraryItem is the JSON shape of one library row (contracts.md §2).
@@ -97,6 +98,9 @@ func (s *server) addToLibrary(c *gin.Context) {
 
 // PUT /api/library/:mangaId/progress {"current_chapter": n, "status"?}
 // → 200 {"manga_id","current_chapter","status","version"} | 400 | 404 | 503
+//
+// Order matters: validate against the catalog, write SQLite, and only after
+// the commit succeeds push the TCP event to the user's OTHER sessions.
 func (s *server) updateProgress(c *gin.Context) {
 	var body struct {
 		CurrentChapter *int    `json:"current_chapter"`
@@ -140,6 +144,12 @@ func (s *server) updateProgress(c *gin.Context) {
 		return
 	}
 
+	// DB committed → now it is safe to tell the other sessions.
+	if s.Sync != nil {
+		ev := tcpsync.ProgressEvent(e.MangaID, e.CurrentChapter, e.Status, e.Version)
+		n := s.Sync.SendToUser(uid, ev, c.GetHeader("X-Session-ID"))
+		log.Printf("progress: user %d %s=%d v%d pushed to %d session(s)", uid, e.MangaID, e.CurrentChapter, e.Version, n)
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"manga_id":        e.MangaID,
 		"current_chapter": e.CurrentChapter,

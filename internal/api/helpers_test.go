@@ -16,6 +16,7 @@ import (
 
 	"mangahub/internal/auth"
 	"mangahub/internal/store"
+	"mangahub/internal/tcpsync"
 )
 
 // ---------------------------------------------------------------- fakes
@@ -81,12 +82,29 @@ func (f *fakeCatalog) UpdateChapters(_ context.Context, id string, total int) (M
 	return m, nil
 }
 
+type pushRec struct {
+	mu     sync.Mutex
+	uid    int64
+	ev     tcpsync.Event
+	except string
+	calls  int
+}
+
+func (p *pushRec) SendToUser(uid int64, ev tcpsync.Event, except string) int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.uid, p.ev, p.except = uid, ev, except
+	p.calls++
+	return 1
+}
+
 // ---------------------------------------------------------------- harness
 
 type env struct {
 	t      *testing.T
 	router *gin.Engine
 	cat    *fakeCatalog
+	push   *pushRec
 	dbPath string
 	store  *store.Store
 	jwt    *auth.Manager
@@ -95,7 +113,7 @@ type env struct {
 func newEnv(t *testing.T) *env {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	e := &env{t: t, cat: newFakeCatalog(),
+	e := &env{t: t, cat: newFakeCatalog(), push: &pushRec{},
 		dbPath: filepath.Join(t.TempDir(), "backend.db"), jwt: auth.NewManager("test-secret", time.Hour)}
 	e.open()
 	t.Cleanup(func() { e.store.Close() })
@@ -108,7 +126,7 @@ func (e *env) open() {
 		e.t.Fatal(err)
 	}
 	e.store = st
-	e.router = NewRouter(Deps{Store: st, Auth: e.jwt, Catalog: e.cat})
+	e.router = NewRouter(Deps{Store: st, Auth: e.jwt, Catalog: e.cat, Sync: e.push})
 }
 
 // restart simulates stopping and starting the backend on the same DB file.

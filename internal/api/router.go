@@ -8,13 +8,20 @@ import (
 
 	"mangahub/internal/auth"
 	"mangahub/internal/store"
+	"mangahub/internal/tcpsync"
 )
+
+// ProgressPusher is implemented by *tcpsync.Hub.
+type ProgressPusher interface {
+	SendToUser(uid int64, ev tcpsync.Event, exceptSession string) int
+}
 
 // Deps are the collaborators wired together in cmd/backend.
 type Deps struct {
 	Store   *store.Store
 	Auth    *auth.Manager
 	Catalog Catalog
+	Sync    ProgressPusher // TCP (F03)
 }
 
 type server struct{ Deps }
