@@ -1,0 +1,43 @@
+# MangaHub — test log (Expected vs Observed)
+
+Environment: Linux, Go 1.27.4, run on 2026-11-14.
+Backend = real `cmd/backend` binary. **Catalog note:** member B's `cmd/catalog` was not merged
+yet, so the end-to-end runs below used a temporary in-memory gRPC stub that implements the same
+`proto/catalog.proto` service. Re-run these rows with the real catalog before the final report.
+
+## Automated tests
+
+`go test -race ./...` → all packages pass (api, auth, cache, config, store, tcpsync, udpnotify).
+
+| Package | What is covered |
+| --- | --- |
+| `internal/store` | duplicate user → `ErrConflict`; unknown user → `ErrNotFound`; data survives close/reopen; duplicate library row → `ErrConflict`; version 1→2→3; user isolation; 20 concurrent updates → version 21 |
+| `internal/auth` | bcrypt hash ≠ password; valid token; wrong secret / tampered token rejected; expired token rejected; `RequireAuth` 401; `RequireAdmin` 403 |
+| `internal/api` | register 201/409/400; login 200/401; protected routes 401 without/forged token; restart keeps users + library; search, empty search `[]`, detail, 404; catalog down → 503; library add 201/409/404/400; progress 200, version bump, TCP push with `X-Session-ID` excluded; chapter 99999 / −1 / missing / string → 400, boundaries 0 and total → 200; isolation (bob → 404 on alice's entry, body `user_id` ignored); 20 concurrent PUT → version 21; admin release 403/200/400/404/503 and no broadcast on failure |
+| `internal/api` (real gRPC) | NotFound→404, InvalidArgument→400 over a real gRPC connection; stopped / frozen / never-started catalog → 503 within the deadline |
+| `internal/tcpsync` | other session of same user receives, sender and other user do not; forged token → `auth_error` + close; first message must be auth; missing `\n` → closed after 5 s; disconnect removes session; ping/pong; concurrent sends |
+| `internal/udpnotify` | 2 subscribed receive `new_chapter`, unsubscribed does not; forged token / bad JSON → `error`; unsubscribe; dead receiver (closed port) does not stop the server; silent subscriber expires after TTL |
+| `internal/cache` | MISS → HIT → release → MISS with new chapter count; TTL 30 s; 404 not cached; Redis down → still 200 from gRPC |
+
+## End-to-end (real processes)
+
+| Feature / protocol | Condition | Expected | Observed |
+| --- | --- | --- | --- |
+| HTTP smoke | `scripts/smoke.sh` | all checks pass | 25 passed, 0 failed |
+| F01 persistence | stop backend (SIGINT), start again on same DB, log in | login 200, library intact | login OK, `naruto` chapter 12 version 2 still there |
+| F03 TCP | alice sessions s2, s3 + bob s1; PUT chapter 12 with `X-Session-ID: s2` | only s3 receives `progress_updated` | s3 got `{"type":"progress_updated","manga_id":"naruto","current_chapter":12,"status":"reading","version":2}`; s2 and bob got nothing |
+| F03 TCP auth | first line with forged token | `auth_error`, connection closed | `{"type":"auth_error","error":"invalid token"}` then EOF |
+| F04 UDP | alice + bob subscribed via `nc -u`; release naruto → 701 | both receive `new_chapter`; response `notified: 2` | both received `{"type":"new_chapter","manga_id":"naruto","title":"Naruto","total_chapters":701}`; `notified: 2` |
+| F06 gRPC | catalog up, `GET /api/manga/naruto` | 200 | 200 in 6 ms |
+| F06 gRPC | `kill -STOP` catalog (frozen) | 503 bounded by 2 s deadline | 503 in 2012 ms, then 2014 ms |
+| F06 gRPC | `kill -CONT` | 200 again | 200 in 11 ms |
+| F06 gRPC | `kill` catalog (process gone) | 503 fast (connection refused) | 503 in 12 ms, then 9 ms |
+| F06 gRPC | restart catalog | backend reconnects without restart | 200 in 11 ms |
+
+## Measured fault timings (for REPORT section 3)
+
+| Fault | Time to controlled error | Why |
+| --- | --- | --- |
+| Catalog frozen (`kill -STOP`) | ≈ 2.01 s | TCP connection still open, nothing answers → `context.WithTimeout(2s)` → `DeadlineExceeded` → 503 |
+| Catalog stopped (`kill`) | ≈ 10 ms | OS refuses the connection → gRPC `Unavailable` → 503 |
+| Catalog never started | ≈ 2 ms (unit test) | same as stopped |

@@ -1,0 +1,42 @@
+// DRAFT written from notes/contracts.md section 7 so the backend (member A)
+// can compile against real stubs. Owner: member B — replace/extend freely,
+// but tell A if a message or field name changes.
+syntax = "proto3";
+
+package catalog.v1;
+
+option go_package = "mangahub/gen/catalogpb";
+
+message Manga {
+  string id = 1;
+  string title = 2;
+  string author = 3;
+  repeated string genres = 4;
+  string status = 5;          // "ongoing" | "completed"
+  int32 total_chapters = 6;
+  string description = 7;
+}
+
+message SearchMangaRequest {
+  string query = 1;           // empty = list all
+  int32 limit = 2;            // 0 = server default
+}
+
+message SearchMangaResponse {
+  repeated Manga items = 1;
+}
+
+message GetMangaRequest {
+  string id = 1;
+}
+
+message UpdateChaptersRequest {
+  string id = 1;
+  int32 total_chapters = 2;   // must be >= current total
+}
+
+service CatalogService {
+  rpc SearchManga(SearchMangaRequest) returns (SearchMangaResponse);
+  rpc GetManga(GetMangaRequest) returns (Manga);                   // InvalidArgument, NotFound
+  rpc UpdateChapters(UpdateChaptersRequest) returns (Manga);       // InvalidArgument, NotFound
+}
