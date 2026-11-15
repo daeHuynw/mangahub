@@ -26,6 +26,9 @@ go run ./cmd/backend        # 2. HTTP+WS :8080, TCP :9090, UDP :9091
 go run ./cmd/tui            # 3. one or more TUI windows
 ```
 
+Or `./scripts/demo.sh`: wipes old databases, starts catalog + backend, creates the demo
+accounts and prints the demo commands.
+
 ## Configuration
 
 All settings are environment variables with defaults (see `.env.example`):
@@ -44,6 +47,17 @@ All settings are environment variables with defaults (see `.env.example`):
 | `CATALOG_TIMEOUT` / `CACHE_TTL` | `2s` / `30s` | backend |
 | `MANGAHUB_HTTP` / `_TCP` / `_UDP` | `http://localhost:8080`, `localhost:9090`, `localhost:9091` | TUI |
 
+## Demo accounts
+
+`alice`, `bob`, `charlie` — password `secret123` (created by `scripts/demo.sh`; databases are not committed).
+
+## Trigger a chapter release (F04)
+
+```bash
+curl -X POST localhost:8080/api/admin/manga/one-piece/release \
+  -H 'X-Admin-Key: dev-admin-key' -H 'Content-Type: application/json' \
+  -d '{"total_chapters": 1131}'
+```
 
 ## Tests
 
@@ -53,5 +67,14 @@ go test -race ./...
 ./scripts/smoke.sh          # HTTP checks against a running backend + catalog
 ```
 
-API and message formats: `notes/contracts.md`.
+Results and measured fault timings: `notes/test-log.md`. API and message formats: `notes/contracts.md`.
 
+## Known limitations
+
+- UDP alerts are best-effort: a lost datagram is not resent. Clients re-subscribe every 30 s;
+  silent subscribers are dropped after 90 s.
+- TCP sync only reaches sessions that are connected at the moment of the update; a TUI that
+  reconnects reloads the library over HTTP.
+- With Redis enabled, if invalidation fails (Redis down during a release) a stale detail can be
+  served for at most the TTL (30 s).
+- No HTTPS/TLS; intended for localhost demo.
