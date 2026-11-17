@@ -41,3 +41,27 @@ yet, so the end-to-end runs below used a temporary in-memory gRPC stub that impl
 | Catalog frozen (`kill -STOP`) | ≈ 2.01 s | TCP connection still open, nothing answers → `context.WithTimeout(2s)` → `DeadlineExceeded` → 503 |
 | Catalog stopped (`kill`) | ≈ 10 ms | OS refuses the connection → gRPC `Unavailable` → 503 |
 | Catalog never started | ≈ 2 ms (unit test) | same as stopped |
+
+## Re-run with the real Catalog Service (member B, B2)
+
+Environment: Windows 11, Go 1.27.3, run on 2026-11-18. Real `cmd/catalog` (SQLite, embedded seed of
+36 manga) + real `cmd/backend`, fresh databases. `jq` was not installed, so `smoke.sh` ran with a
+minimal local `jq` stand-in supporting only the filters the script uses.
+
+| Feature / protocol | Condition | Expected | Observed |
+| --- | --- | --- | --- |
+| HTTP smoke | `scripts/smoke.sh`, real catalog | all checks pass | 25 passed, 0 failed (search `piece` → One Piece; release 1131 OK; release 1 → 400) |
+| F02 search | `GET /api/manga?q=zzzz` | 200 `{"items":[]}` | 200 `{"items":[]}` |
+| F02 search | `GET /api/manga?q=sports` (genre) | 200 | 200 in 2 ms |
+| F06 gRPC | catalog up, `GET /api/manga/naruto` | 200 | 200 in 2 ms |
+| F06 gRPC | catalog process killed | 503 fast | 503 in 1.9 ms, then 1.3 ms |
+| F06 gRPC | catalog restarted, backend not restarted | 200, data kept, no re-seed | 200 in 2.9 ms; one-piece still 1131; log "already has 36 manga, seed skipped" |
+| F06 gRPC | frozen catalog (`kill -STOP`) | — | not reproducible on Windows (no SIGSTOP); covered by A's Linux run above and by `TestRPC_ClientDeadlineReachesServer` |
+
+Automated (`go test -race ./...`, all packages pass) — `internal/catalog` and `cmd/catalog`:
+seed once / all-or-nothing / ≥30 manga ≥4 genres; search, get, update incl. equal/decrease → InvalidArgument,
+unknown → NotFound; DB error → Internal "internal error" (no SQL or path leaked); handler panic → Internal and
+the server keeps serving; client deadline → DeadlineExceeded and the handler's context is cancelled;
+GracefulStop waits for an in-flight RPC then refuses connections; member A's `api.GRPCCatalog` against the real
+server (404/400/503 mapping); program restart on the same DB keeps the released chapter; missing seed file and
+busy port fail at startup.
