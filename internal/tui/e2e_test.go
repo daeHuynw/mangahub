@@ -98,6 +98,55 @@ func TestE2E_RealBackend(t *testing.T) {
 	h.waitFor("health", func() bool { return strings.Contains(h.a.help.root.GetText(true), "reachable") })
 	h.key(tcell.KeyEscape)
 	step("F6 connection status: backend reachable", s)
+
+	// F03 (HTTP part): add from the browser, edit in My Library.
+	s = time.Now()
+	h.ui(func() { h.a.browser.setGenre(allGenres); h.a.browser.query.SetText("") })
+	h.typeText("/")
+	h.typeText("piece")
+	h.key(tcell.KeyEnter)
+	h.waitFor("one-piece row", func() bool { return h.a.browser.list.GetItemCount() == 1 })
+	h.key(tcell.KeyTab) // search -> genre
+	h.key(tcell.KeyTab) // genre -> list
+	h.typeText("a")
+	h.waitFor("added", func() bool { return strings.Contains(h.a.status.GetText(true), "Added One Piece") })
+	h.typeText("a")
+	h.waitFor("409", func() bool { return strings.Contains(h.a.status.GetText(true), "already in your library") })
+	step("F03 add One Piece (201), add again (409)", s)
+
+	s = time.Now()
+	h.key(tcell.KeyF3)
+	h.waitFor("library row", func() bool {
+		return h.cell(1, 0) == "One Piece" && strings.HasPrefix(h.cell(1, 2), "0 / ") && h.cell(1, 3) == "v1"
+	})
+	h.typeText("+")
+	h.waitFor("chapter 1 v2", func() bool { return strings.HasPrefix(h.cell(1, 2), "1 / ") && h.cell(1, 3) == "v2" })
+	step("F03 My Library row, + -> chapter 1 (v2)", s)
+
+	s = time.Now()
+	h.key(tcell.KeyEnter)
+	h.waitFor("dialog", func() bool { p, _ := h.a.pages.GetFrontPage(); return p == pageUpdate })
+	h.setChapter("25")
+	h.saveDialog()
+	h.waitFor("chapter 25 v3", func() bool { return strings.HasPrefix(h.cell(1, 2), "25 / ") && h.cell(1, 3) == "v3" })
+	h.key(tcell.KeyEnter)
+	h.waitFor("dialog again", func() bool { p, _ := h.a.pages.GetFrontPage(); return p == pageUpdate })
+	h.setChapter("99999")
+	h.saveDialog()
+	h.waitFor("range error", func() bool { return strings.Contains(h.a.library.formMsg.GetText(true), "between 0 and") })
+	h.key(tcell.KeyEscape)
+	step("F03 dialog: save 25 (v3), 99999 rejected", s)
+
+	// Persistence: a brand-new TUI session (fresh login) sees the same row.
+	s = time.Now()
+	h2 := (&harness{t: t}).run(base)
+	h2.login(user, "secret123")
+	h2.waitFor("second session logged in", func() bool { return h2.a.loggedIn })
+	h2.key(tcell.KeyF3)
+	h2.waitFor("same row in session 2", func() bool {
+		return strings.HasPrefix(h2.cell(1, 2), "25 / ") && h2.cell(1, 3) == "v3"
+	})
+	step("second session sees chapter 25 v3 (stored in SQLite)", s)
 }
 
 // TestE2E_CatalogDown: run with the backend up and the catalog STOPPED

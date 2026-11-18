@@ -99,6 +99,38 @@ func TestContract_ClientAgainstRealBackendAndCatalog(t *testing.T) {
 		t.Fatalf("unknown: %v, want 404", err)
 	}
 
+	// Library (F03, HTTP part).
+	if lib, err := c.ListLibrary(ctx); err != nil || len(lib) != 0 {
+		t.Fatalf("empty library: %v, %v", lib, err)
+	}
+	added, err := c.AddToLibrary(ctx, "one-piece", "")
+	if err != nil || added.Status != StatusPlanToRead || added.Title != "One Piece" || added.TotalChapters != 1130 || added.Version != 1 {
+		t.Fatalf("add: %+v, %v", added, err)
+	}
+	if _, err := c.AddToLibrary(ctx, "one-piece", ""); StatusOf(err) != 409 {
+		t.Fatalf("add duplicate: %v, want 409", err)
+	}
+	if _, err := c.AddToLibrary(ctx, "nope-nope", ""); StatusOf(err) != 404 {
+		t.Fatalf("add unknown: %v, want 404", err)
+	}
+	p, err := c.UpdateProgress(ctx, "one-piece", 25, StatusReading)
+	if err != nil || p.CurrentChapter != 25 || p.Status != StatusReading || p.Version != 2 {
+		t.Fatalf("progress: %+v, %v", p, err)
+	}
+	if _, err := c.UpdateProgress(ctx, "one-piece", 99999, ""); StatusOf(err) != 400 {
+		t.Fatalf("chapter > total: %v, want 400", err)
+	}
+	if _, err := c.UpdateProgress(ctx, "one-piece", -1, ""); StatusOf(err) != 400 {
+		t.Fatalf("chapter < 0: %v, want 400", err)
+	}
+	if _, err := c.UpdateProgress(ctx, "naruto", 1, ""); StatusOf(err) != 404 {
+		t.Fatalf("not in library: %v, want 404", err)
+	}
+	lib, err := c.ListLibrary(ctx)
+	if err != nil || len(lib) != 1 || lib[0].CurrentChapter != 25 || lib[0].Version != 2 {
+		t.Fatalf("library after update: %+v, %v", lib, err)
+	}
+
 	grpcSrv.Stop() // catalog down → the TUI gets a clean 503, not a hang
 	if _, err := c.SearchManga(ctx, "piece"); StatusOf(err) != 503 {
 		t.Fatalf("catalog stopped: %v, want 503", err)

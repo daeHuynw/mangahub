@@ -88,3 +88,19 @@ rendered correctly and Ctrl+C restored the shell prompt.
 | Graceful shutdown | real Ctrl+C on `backend.exe` | clean exit | `shutting down...`, process exited |
 
 Automated: `go test -race ./...` passes (11 packages incl. `internal/tui` and `internal/tui/client`).
+
+## Library through the TUI (member B, B4)
+
+Windows 11, 2026-11-18. Real catalog + backend on fresh DBs, flows driven by `TestE2E_RealBackend`.
+
+| Feature / protocol | Condition | Expected | Observed |
+| --- | --- | --- | --- |
+| F03 HTTP | browser, `a` on One Piece | 201, "Added ..." | OK |
+| F03 HTTP | `a` again | 409, "already in your library" | OK |
+| F03 HTTP | F3 My Library | row One Piece, 0 / 1130, v1 | OK |
+| F03 HTTP | `+` on the row | chapter 1, v2 | OK |
+| F03 HTTP | dialog: chapter 25 | chapter 25, v3 | OK |
+| F03 validation | dialog: chapter 99999 | rejected in the TUI, no request | "Chapter must be between 0 and 1130." |
+| F03 persistence | second TUI session logs in | same row 25 / v3 | OK |
+| F03 persistence | backend restarted, `GET /api/library` | row kept | `current_chapter 25, version 3` |
+| F06 gRPC | first catalog call right after backend start | 200 | **503 after 2 s** on this machine, see `notes/defects.md` D1 |

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -35,8 +36,14 @@ func fakeAPI(t *testing.T, h *harness) *httptest.Server {
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h.requests.Add(1)
-		var body map[string]string
-		json.NewDecoder(r.Body).Decode(&body)
+		var raw map[string]any
+		json.NewDecoder(r.Body).Decode(&raw)
+		body := map[string]string{}
+		for k, v := range raw {
+			if str, ok := v.(string); ok {
+				body[k] = str
+			}
+		}
 		authed := r.Header.Get("Authorization") == "Bearer tok"
 		switch {
 		case r.URL.Path == "/api/health":
@@ -59,6 +66,57 @@ func fakeAPI(t *testing.T, h *harness) *httptest.Server {
 			write(w, 200, map[string]any{"token": tok, "user": map[string]any{"id": 1, "username": body["username"]}})
 		case !authed:
 			write(w, 401, map[string]string{"error": "missing token"})
+		case r.URL.Path == "/api/library" && r.Method == http.MethodGet:
+			h.libMu.Lock()
+			items := []client.LibraryItem{}
+			for _, it := range h.lib {
+				items = append(items, *it)
+			}
+			h.libMu.Unlock()
+			write(w, 200, map[string]any{"items": items})
+		case r.URL.Path == "/api/library" && r.Method == http.MethodPost:
+			var m *client.Manga
+			for i := range catalogFixture {
+				if catalogFixture[i].ID == body["manga_id"] {
+					m = &catalogFixture[i]
+				}
+			}
+			if m == nil {
+				write(w, 404, map[string]string{"error": "manga not found"})
+				return
+			}
+			h.libMu.Lock()
+			defer h.libMu.Unlock()
+			if h.lib == nil {
+				h.lib = map[string]*client.LibraryItem{}
+			}
+			if h.lib[m.ID] != nil {
+				write(w, 409, map[string]string{"error": "manga already in your library"})
+				return
+			}
+			it := &client.LibraryItem{MangaID: m.ID, Title: m.Title, Status: "plan-to-read", TotalChapters: m.TotalChapters,
+				UpdatedAt: "2026-11-18T10:00:00Z", Version: 1}
+			h.lib[m.ID] = it
+			write(w, 201, it)
+		case strings.HasPrefix(r.URL.Path, "/api/library/") && strings.HasSuffix(r.URL.Path, "/progress"):
+			id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/library/"), "/progress")
+			h.libMu.Lock()
+			defer h.libMu.Unlock()
+			it := h.lib[id]
+			if it == nil {
+				write(w, 404, map[string]string{"error": "manga is not in your library"})
+				return
+			}
+			ch, _ := raw["current_chapter"].(float64)
+			if ch == 13 { // a rejection the TUI's own check cannot predict
+				write(w, 400, map[string]string{"error": "current_chapter must be between 0 and 12"})
+				return
+			}
+			it.CurrentChapter, it.Version = int(ch), it.Version+1
+			if body["status"] != "" {
+				it.Status = body["status"]
+			}
+			write(w, 200, client.Progress{MangaID: id, CurrentChapter: it.CurrentChapter, Status: it.Status, Version: it.Version})
 		case r.URL.Path == "/api/manga":
 			q := strings.ToLower(r.URL.Query().Get("q"))
 			if q == "" && h.failEmptySearch.Load() {
@@ -99,6 +157,9 @@ type harness struct {
 	requests atomic.Int32
 	// failEmptySearch makes the fake answer 503 to the full-catalog query.
 	failEmptySearch atomic.Bool
+
+	libMu sync.Mutex
+	lib   map[string]*client.LibraryItem // the fake backend's library
 }
 
 // start runs the app against the fake backend.
@@ -136,8 +197,22 @@ func (h *harness) run(httpURL string) *harness {
 	return h
 }
 
-// ui runs f inside the event loop and waits for it.
-func (h *harness) ui(f func()) { h.a.tv.QueueUpdate(f) }
+// ui runs f inside the event loop and waits for it. f must not call
+// t.Fatal (that would kill the tview goroutine); t.Error is fine. If the
+// event loop stopped, the test fails after 5 s instead of hanging.
+func (h *harness) ui(f func()) {
+	h.t.Helper()
+	done := make(chan struct{})
+	go func() {
+		h.a.tv.QueueUpdate(f)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		h.t.Fatal("tview event loop is not responding (stopped or blocked)")
+	}
+}
 
 func (h *harness) typeText(s string) {
 	for _, r := range s {
@@ -327,21 +402,30 @@ func TestUI_LoginBrowseFilterSearchAndErrors(t *testing.T) {
 func TestUI_StaleDetailsAreDropped(t *testing.T) {
 	h := start(t)
 	h.login("alice", "secret123")
-	h.waitFor("catalog listed", func() bool { return h.a.browser.list.GetItemCount() == 3 })
-	// Move quickly down then back up: the final text must be row 0.
+	h.waitFor("catalog listed", func() bool {
+		return h.a.browser.list.GetItemCount() == 3 && strings.Contains(h.a.browser.details.GetText(true), "Eiichiro Oda")
+	})
+	var startSeq int
+	h.ui(func() { startSeq = h.a.browser.detailSeq })
+	// Move quickly down then back up: four detail requests, the last for row 0.
 	h.key(tcell.KeyDown)
 	h.key(tcell.KeyDown)
 	h.key(tcell.KeyUp)
 	h.key(tcell.KeyUp)
-	h.waitFor("row 0 details", func() bool {
-		return strings.Contains(h.a.browser.details.GetText(true), "Eiichiro Oda")
+	// Wait until all four key presses were handled AND the last answer is in
+	// (checking the text alone would pass at once with the old row-0 text).
+	h.waitFor("row 0 details from the last request", func() bool {
+		return h.a.browser.detailSeq == startSeq+4 && h.a.browser.list.GetCurrentItem() == 0 &&
+			strings.Contains(h.a.browser.details.GetText(true), "Eiichiro Oda")
 	})
 	time.Sleep(200 * time.Millisecond) // let any late responses arrive
-	h.ui(func() {
-		if txt := h.a.browser.details.GetText(true); !strings.Contains(txt, "Eiichiro Oda") {
-			t.Fatalf("stale response replaced the details:\n%s", txt)
-		}
-	})
+	// Read in the event loop, assert outside it: t.Fatal inside h.ui would
+	// kill the tview goroutine and hang the test.
+	var txt string
+	h.ui(func() { txt = h.a.browser.details.GetText(true) })
+	if !strings.Contains(txt, "Eiichiro Oda") {
+		t.Fatalf("stale response replaced the details:\n%s", txt)
+	}
 }
 
 // A 401 in the middle of a session (expired/revoked token) must clear the
@@ -378,4 +462,108 @@ func TestUI_GenresFilledWhenFirstLoadFails(t *testing.T) {
 	h.waitFor("genres from search", func() bool {
 		return strings.Join(h.a.browser.genres, ",") == allGenres+",action,adventure"
 	})
+}
+
+// cell returns the text of a library table cell (event loop only).
+func (h *harness) cell(row, col int) string {
+	c := h.a.library.table.GetCell(row, col)
+	if c == nil {
+		return ""
+	}
+	return c.Text
+}
+
+func (h *harness) saveDialog() {
+	h.key(tcell.KeyTab) // chapter -> status
+	h.key(tcell.KeyTab) // status -> Save
+	h.key(tcell.KeyEnter)
+}
+
+func (h *harness) setChapter(text string) {
+	for i := 0; i < 6; i++ {
+		h.key(tcell.KeyBackspace2)
+	}
+	h.typeText(text)
+}
+
+func TestUI_LibraryAddEditAndValidate(t *testing.T) {
+	h := start(t)
+	h.login("alice", "secret123")
+	h.waitFor("catalog", func() bool { return h.a.browser.list.GetItemCount() == 3 })
+
+	// Add the selected manga with "a"; a second "a" gets 409.
+	h.typeText("a")
+	h.waitFor("added", func() bool { return strings.Contains(h.a.status.GetText(true), "Added One Piece") })
+	h.typeText("a")
+	h.waitFor("409", func() bool { return strings.Contains(h.a.status.GetText(true), "already in your library") })
+
+	// F3: the row is there.
+	h.key(tcell.KeyF3)
+	h.waitFor("library row", func() bool {
+		return h.a.library.table.GetRowCount() == 2 && h.cell(1, 0) == "One Piece" && h.cell(1, 2) == "0 / 1130" && h.cell(1, 3) == "v1"
+	})
+
+	// Enter opens the dialog; save chapter 25 → v2.
+	h.key(tcell.KeyEnter)
+	h.waitFor("dialog", func() bool { p, _ := h.a.pages.GetFrontPage(); return p == pageUpdate })
+	h.setChapter("25")
+	h.saveDialog()
+	h.waitFor("saved 25", func() bool {
+		p, _ := h.a.pages.GetFrontPage()
+		return p == pageLibrary && h.cell(1, 2) == "25 / 1130" && h.cell(1, 3) == "v2"
+	})
+
+	// Out of range: rejected locally, no request sent, dialog stays.
+	h.key(tcell.KeyEnter)
+	h.waitFor("dialog again", func() bool { p, _ := h.a.pages.GetFrontPage(); return p == pageUpdate })
+	before := h.requests.Load()
+	h.setChapter("9999")
+	h.saveDialog()
+	h.waitFor("local check", func() bool { return strings.Contains(h.a.library.formMsg.GetText(true), "between 0 and 1130") })
+	if n := h.requests.Load(); n != before {
+		t.Fatalf("%d request(s) sent for an out-of-range chapter", n-before)
+	}
+
+	// Backend rejects (400): its message is shown in the dialog.
+	h.setChapter("13")
+	h.saveDialog()
+	h.waitFor("backend 400", func() bool {
+		return strings.Contains(h.a.library.formMsg.GetText(true), "current_chapter must be between 0 and 12")
+	})
+
+	// Esc closes without saving.
+	h.key(tcell.KeyEscape)
+	h.waitFor("closed", func() bool { p, _ := h.a.pages.GetFrontPage(); return p == pageLibrary && h.cell(1, 2) == "25 / 1130" })
+
+	// "+" and "-" change one chapter.
+	h.typeText("+")
+	h.waitFor("plus", func() bool { return h.cell(1, 2) == "26 / 1130" && h.cell(1, 3) == "v3" })
+	h.typeText("-")
+	h.waitFor("minus", func() bool { return h.cell(1, 2) == "25 / 1130" && h.cell(1, 3) == "v4" })
+
+	// Status change through the dialog: Down in the drop-down picks "reading".
+	h.key(tcell.KeyEnter)
+	h.waitFor("dialog for status", func() bool { p, _ := h.a.pages.GetFrontPage(); return p == pageUpdate })
+	h.ui(func() { h.a.library.status.SetCurrentOption(1) })
+	h.saveDialog()
+	h.waitFor("status saved", func() bool { return strings.Contains(h.cell(1, 1), "reading") && h.cell(1, 3) == "v5" })
+
+	// Leaving with F2 and coming back reloads from the backend.
+	h.key(tcell.KeyF2)
+	h.key(tcell.KeyF3)
+	h.waitFor("reloaded", func() bool { return h.cell(1, 2) == "25 / 1130" && h.cell(1, 3) == "v5" })
+}
+
+func TestUI_EmptyLibrary(t *testing.T) {
+	h := start(t)
+	h.login("alice", "secret123")
+	h.waitFor("catalog", func() bool { return h.a.browser.list.GetItemCount() == 3 })
+	h.key(tcell.KeyF3)
+	h.waitFor("empty message", func() bool { return strings.Contains(h.a.status.GetText(true), "library is empty") })
+	h.typeText("+") // nothing selected: must not crash or send anything
+	h.key(tcell.KeyEnter)
+	time.Sleep(50 * time.Millisecond)
+	if p := h.page(); p != pageLibrary {
+		t.Fatalf("page = %s", p)
+	}
 }

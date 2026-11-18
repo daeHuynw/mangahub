@@ -22,6 +22,8 @@ import (
 const (
 	pageLogin   = "login"
 	pageBrowser = "browser"
+	pageLibrary = "library"
+	pageUpdate  = "update" // Update Chapter dialog, shown over the library
 	pageHelp    = "help"
 )
 
@@ -37,6 +39,7 @@ type App struct {
 
 	login   *loginView
 	browser *browserView
+	library *libraryView
 	help    *helpView
 
 	loggedIn bool // only read/written in the event loop
@@ -60,10 +63,12 @@ func New(cfg Config, opts ...Option) *App {
 	}
 	a.login = newLoginView(a)
 	a.browser = newBrowserView(a)
+	a.library = newLibraryView(a)
 	a.help = newHelpView(a)
 
 	a.pages.AddPage(pageLogin, a.login.root, true, true)
 	a.pages.AddPage(pageBrowser, a.browser.root, true, false)
+	a.pages.AddPage(pageLibrary, a.library.root, true, false)
 	a.pages.AddPage(pageHelp, a.help.root, true, false)
 
 	root := tview.NewFlex().SetDirection(tview.FlexRow).
@@ -106,7 +111,9 @@ func (a *App) globalKeys(ev *tcell.EventKey) *tcell.EventKey {
 	switch ev.Key() {
 	case tcell.KeyF2:
 		a.showPage(pageBrowser)
-	case tcell.KeyF3, tcell.KeyF4, tcell.KeyF5:
+	case tcell.KeyF3:
+		a.showPage(pageLibrary)
+	case tcell.KeyF4, tcell.KeyF5:
 		a.setStatus(statusWarn, "This screen is not available yet.")
 	case tcell.KeyF6:
 		a.showPage(pageHelp)
@@ -118,10 +125,13 @@ func (a *App) globalKeys(ev *tcell.EventKey) *tcell.EventKey {
 
 // showPage switches screens and gives focus to the page's default widget.
 func (a *App) showPage(name string) {
+	a.pages.RemovePage(pageUpdate) // leaving the library closes its dialog
 	a.pages.SwitchToPage(name)
 	switch name {
 	case pageBrowser:
 		a.browser.focus()
+	case pageLibrary:
+		a.library.open()
 	case pageHelp:
 		a.help.open()
 	}
@@ -136,6 +146,7 @@ func (a *App) sessionExpired(err error) bool {
 	}
 	a.api.Logout()
 	a.loggedIn = false
+	a.library.reset()
 	a.login.show("red", "Your session expired. Please log in again.")
 	a.showPage(pageLogin)
 	a.tv.SetFocus(a.login.form)

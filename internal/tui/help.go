@@ -69,6 +69,8 @@ func (v *helpView) render() {
 	for _, k := range [][2]string{
 		{"F2", "Manga Browser"}, {"F3", "My Library"}, {"F4", "Discussion"},
 		{"F5", "Notifications"}, {"F6", "this screen"},
+		{"a", "add the selected manga to your library (browser)"},
+		{"Enter / + / -", "edit chapter, or one chapter up/down (library)"},
 		{"/", "focus the search box"}, {"Tab / Shift+Tab", "next / previous pane"},
 		{"Up / Down", "move in a list"}, {"Enter", "confirm / open details"},
 		{"Esc", "back"}, {"Ctrl+C", "quit"},

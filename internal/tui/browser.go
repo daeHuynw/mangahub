@@ -66,7 +66,7 @@ func newBrowserView(a *App) *browserView {
 	top := tview.NewFlex().AddItem(v.query, 0, 2, true).AddItem(v.genre, 30, 0, false)
 	body := tview.NewFlex().AddItem(v.list, 0, 1, false).AddItem(v.details, 0, 1, false)
 	help := tview.NewTextView().SetDynamicColors(true).
-		SetText("[gray]/ search  Tab next pane  Up/Down select  Enter open details  Esc back to list[-]")
+		SetText("[gray]/ search  Tab next pane  Up/Down select  a add to library  Enter open details  Esc back to list[-]")
 	v.root = tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(top, 1, 0, true).
 		AddItem(body, 0, 1, false).
@@ -101,6 +101,11 @@ func (v *browserView) keys(ev *tcell.EventKey) *tcell.EventKey {
 		return nil
 	case ev.Key() == tcell.KeyRune && ev.Rune() == '/' && focused != v.query:
 		v.a.tv.SetFocus(v.query)
+		return nil
+	case ev.Key() == tcell.KeyRune && ev.Rune() == 'a' && focused != v.query:
+		if i := v.list.GetCurrentItem(); i >= 0 && i < len(v.shown) {
+			v.a.library.add(v.shown[i])
+		}
 		return nil
 	case ev.Key() == tcell.KeyEscape && focused == v.details:
 		v.a.tv.SetFocus(v.list)
