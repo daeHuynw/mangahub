@@ -65,3 +65,26 @@ the server keeps serving; client deadline → DeadlineExceeded and the handler's
 GracefulStop waits for an in-flight RPC then refuses connections; member A's `api.GRPCCatalog` against the real
 server (404/400/503 mapping); program restart on the same DB keeps the released chapter; missing seed file and
 busy port fail at startup.
+
+## Week 1 acceptance through the TUI (member B, B3)
+
+Environment: Windows 11, Go 1.27.3, 2026-11-18. Real `bin/catalog.exe` + `bin/backend.exe` started in
+separate terminals on fresh DBs. TUI flows driven by `TestE2E_RealBackend` / `TestE2E_CatalogDown`
+(`internal/tui/e2e_test.go`: the real `tui.App` on a tcell simulation screen, keys injected like a user,
+talking HTTP to the live backend). The real `tui.exe` was also started in a Windows console: the login screen
+rendered correctly and Ctrl+C restored the shell prompt.
+
+| Feature / protocol | Condition | Expected | Observed |
+| --- | --- | --- | --- |
+| F01 HTTP | register new user in the form, auto login | browser opens, header shows the user | OK in 1.58 s with `-race` (bcrypt) |
+| F02 HTTP→gRPC | catalog listed after login | ≥ 30 manga, first details loaded | 36 manga; details with author/genres/status/chapters/description |
+| F02 | search `piece` | 1 row One Piece + details | OK in 195 ms |
+| F02 | search `zzzzzz` | empty list + "No manga matches" | OK |
+| F02 | genre filter `sports` | only sports manga | 3 manga, all tagged sports |
+| Status / help | F6 | backend reachable | "reachable (GET /api/health ...)" |
+| F06 gRPC | catalog stopped (Ctrl+C), backend up, log in and search | login OK, controlled 503 message, user stays logged in | OK in 148 ms: "The catalog service is unavailable right now..." |
+| F06 gRPC | catalog restarted, backend and TUI not restarted | works again, no re-seed | "already has 36 manga, seed skipped"; e2e passes again |
+| Graceful shutdown | real Ctrl+C on `catalog.exe` (terminal panel sends a console Ctrl+C) | `shutting down` then `stopped`, no panic | stopped 3.4 ms after the signal (and 0.6 ms on the second run); DB reopened cleanly |
+| Graceful shutdown | real Ctrl+C on `backend.exe` | clean exit | `shutting down...`, process exited |
+
+Automated: `go test -race ./...` passes (11 packages incl. `internal/tui` and `internal/tui/client`).
