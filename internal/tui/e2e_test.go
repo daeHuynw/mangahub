@@ -13,6 +13,7 @@ import (
 
 	"mangahub/internal/tui/tcpclient"
 	"mangahub/internal/tui/udpclient"
+	"mangahub/internal/tui/wsclient"
 )
 
 // TestE2E_RealBackend drives the real TUI (on a simulation screen) against a
@@ -196,6 +197,29 @@ func TestE2E_RealBackend(t *testing.T) {
 		t.Fatalf("user C saw user A's event: status %q, %d rows", cStatus, cRows)
 	}
 	step("user C received nothing", time.Now())
+
+	// F05: all three TUIs open Discussion; C moves to #one-piece; a message
+	// from session A reaches session B (same room) but not C.
+	s = time.Now()
+	for _, x := range []*harness{h, h2, h3} {
+		x.waitFor("chat connected", func() bool { return x.a.chat.state == wsclient.Connected })
+		x.key(tcell.KeyF4)
+	}
+	h3.say("/join one-piece")
+	h3.waitFor("C in one-piece", func() bool {
+		return strings.Contains(h3.chatText(), other+" joined") && h3.a.chat.client.Room() == "one-piece"
+	})
+	h.say("hello from session A")
+	h2.waitFor("B got A's message", func() bool { return strings.Contains(h2.chatText(), user+": hello from session A") })
+	h3.say("one-piece talk")
+	h3.waitFor("C's own line", func() bool { return strings.Contains(h3.chatText(), other+": one-piece talk") })
+	var cChat, aChat string
+	h3.ui(func() { cChat = h3.chatText() })
+	h.ui(func() { aChat = h.chatText() })
+	if strings.Contains(cChat, "hello from session A") || strings.Contains(aChat, "one-piece talk") {
+		t.Fatalf("room isolation broken:\nC:\n%s\nA:\n%s", cChat, aChat)
+	}
+	step("F05: A -> B in #general, C in #one-piece sees neither way", s)
 
 	// F04: A and B are subscribed to UDP alerts; C logs out (unsubscribe).
 	s = time.Now()

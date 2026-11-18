@@ -11,6 +11,7 @@ import (
 
 	"mangahub/internal/tui/tcpclient"
 	"mangahub/internal/tui/udpclient"
+	"mangahub/internal/tui/wsclient"
 )
 
 // helpView is the Connection Status / Help screen: configured addresses, a
@@ -81,6 +82,25 @@ func (v *helpView) syncLine() string {
 	return "[gray]not connected[-]"
 }
 
+// chatLine describes the WebSocket for the status screen.
+func (v *helpView) chatLine() string {
+	switch v.a.chat.state {
+	case wsclient.Connected:
+		room := wsclient.DefaultRoom
+		if c := v.a.chat.client; c != nil {
+			room = c.Room()
+		}
+		return "[green]connected[-], room #" + tview.Escape(room)
+	case wsclient.Connecting:
+		return "[yellow]connecting...[-]"
+	case wsclient.Disconnected:
+		return "[red]disconnected[-], retrying"
+	case wsclient.Rejected:
+		return "[red]token rejected[-]"
+	}
+	return "[gray]not connected[-]"
+}
+
 // alertLine describes the UDP subscription for the status screen.
 func (v *helpView) alertLine() string {
 	s := v.a.alerts
@@ -103,10 +123,11 @@ func (v *helpView) render() {
 	fmt.Fprintf(&b, "  HTTP backend  %s  %s\n", tview.Escape(v.a.cfg.HTTP), v.health)
 	fmt.Fprintf(&b, "  TCP sync      %s  %s\n", tview.Escape(v.a.cfg.TCP), v.syncLine())
 	fmt.Fprintf(&b, "  UDP alerts    %s  %s\n", tview.Escape(v.a.cfg.UDP), v.alertLine())
+	fmt.Fprintf(&b, "  WebSocket     %s  %s\n", tview.Escape(wsURL(v.a.cfg.HTTP)), v.chatLine())
 	fmt.Fprintf(&b, "  Catalog       reached only through the backend (TUI -> HTTP -> Gin -> gRPC)\n\n")
 	fmt.Fprintf(&b, "[::b]Keys[::-]\n")
 	for _, k := range [][2]string{
-		{"F2", "Manga Browser"}, {"F3", "My Library"}, {"F4", "Discussion"},
+		{"F2", "Manga Browser"}, {"F3", "My Library"}, {"F4", "Discussion (room chat)"},
 		{"F5", "Notifications"}, {"F6", "this screen"},
 		{"a", "add the selected manga to your library (browser)"},
 		{"Enter / + / -", "edit chapter, or one chapter up/down (library)"},

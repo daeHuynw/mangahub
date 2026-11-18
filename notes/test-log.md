@@ -174,3 +174,24 @@ through A's router with a real JWT from A's login endpoint.
 
 Note: Gin's request log prints the full URL, so `?token=<JWT>` ends up in the backend log. The TUI
 client (B8) sends the token in the `Authorization` header instead.
+
+## Discussion screen through the TUI (member B, B8)
+
+Windows 11, 2026-11-18. Same three-TUI live run (A and B = same user, C = another user), now covering
+F01-F05 in one pass (`TestE2E_RealBackend`).
+
+| Feature / protocol | Condition | Expected | Observed |
+| --- | --- | --- | --- |
+| F05 WS | A, B, C log in | each TUI opens one WebSocket, all in #general | `chat: ... connected (general: 1/2/3)`; header "chat on" |
+| F05 WS | token on the upgrade | sent in the Authorization header | backend log shows `GET "/ws"` without `?token=` |
+| F05 WS | C types `/join one-piece` in F4 | C moves room | C's screen title `#one-piece`, "C joined" |
+| F05 WS | A sends "hello from session A" | B shows it with A's name, C does not | OK; C's own `one-piece talk` not seen by A |
+| F05 WS | C logs out (Ctrl+L) | WebSocket, TCP and UDP closed together | `tcpsync: user 3 -s3`, `udpnotify: unsubscribe`, `chat: ... disconnected from one-piece` |
+| F05 WS | A and B quit | closed cleanly | `disconnected from general` x2 |
+
+Automated: `internal/tui/wsclient` against the real chat hub (token in header not URL, room isolation,
+reconnect rejoins the picked room, Say while offline returns ErrNotConnected, 401 stops without retry,
+server down keeps retrying, a silent server is detected after ReadTimeout). UI (`discussion_test.go`):
+three TUIs on one hub (Alice/Bob in #general, Charlie in #one-piece, Bob logs out, Alice sees "bob left"
+and keeps chatting), typing is not lost while messages arrive, local checks for room name and 500 chars,
+room list built from the library.

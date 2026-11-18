@@ -17,6 +17,9 @@ import (
 	"github.com/rivo/tview"
 
 	"mangahub/internal/tui/client"
+	"mangahub/internal/tui/tcpclient"
+	"mangahub/internal/tui/udpclient"
+	"mangahub/internal/tui/wsclient"
 )
 
 // Page names.
@@ -26,6 +29,7 @@ const (
 	pageLibrary = "library"
 	pageUpdate  = "update" // Update Chapter dialog, shown over the library
 	pageNotify  = "notifications"
+	pageChat    = "discussion"
 	pageHelp    = "help"
 )
 
@@ -43,11 +47,13 @@ type App struct {
 	browser       *browserView
 	library       *libraryView
 	notifications *notificationsView
+	discussion    *discussionView
 	help          *helpView
 
 	loggedIn bool       // only read/written in the event loop
 	sync     syncState  // TCP progress sync (event loop only)
 	alerts   alertState // UDP chapter alerts (event loop only)
+	chat     chatState  // WebSocket discussion (event loop only)
 	done     chan struct{}
 }
 
@@ -72,12 +78,15 @@ func New(cfg Config, opts ...Option) *App {
 	a.browser = newBrowserView(a)
 	a.library = newLibraryView(a)
 	a.notifications = newNotificationsView(a)
+	a.sync.state, a.alerts.state, a.chat.state = tcpclient.Stopped, udpclient.Stopped, wsclient.Stopped
+	a.discussion = newDiscussionView(a)
 	a.help = newHelpView(a)
 
 	a.pages.AddPage(pageLogin, a.login.root, true, true)
 	a.pages.AddPage(pageBrowser, a.browser.root, true, false)
 	a.pages.AddPage(pageLibrary, a.library.root, true, false)
 	a.pages.AddPage(pageNotify, a.notifications.root, true, false)
+	a.pages.AddPage(pageChat, a.discussion.root, true, false)
 	a.pages.AddPage(pageHelp, a.help.root, true, false)
 
 	root := tview.NewFlex().SetDirection(tview.FlexRow).
@@ -102,6 +111,9 @@ func (a *App) Run() error {
 	// The event loop is gone, so nothing else touches sync/alerts now.
 	if a.sync.cancel != nil {
 		a.sync.cancel()
+	}
+	if a.chat.cancel != nil {
+		a.chat.cancel() // sends a close frame: the room sees "left" at once
 	}
 	if a.alerts.cancel != nil {
 		a.alerts.cancel()
@@ -148,7 +160,7 @@ func (a *App) globalKeys(ev *tcell.EventKey) *tcell.EventKey {
 	case tcell.KeyF3:
 		a.showPage(pageLibrary)
 	case tcell.KeyF4:
-		a.setStatus(statusWarn, "This screen is not available yet.")
+		a.showPage(pageChat)
 	case tcell.KeyF5:
 		a.showPage(pageNotify)
 	case tcell.KeyF6:
@@ -172,6 +184,8 @@ func (a *App) showPage(name string) {
 		a.library.open()
 	case pageNotify:
 		a.notifications.open()
+	case pageChat:
+		a.discussion.open()
 	case pageHelp:
 		a.help.open()
 	}
@@ -193,10 +207,12 @@ func (a *App) sessionExpired(err error) bool {
 func (a *App) endSession(color, msg string) {
 	a.stopSync()
 	a.stopAlerts()
+	a.stopChat()
 	a.api.Logout()
 	a.loggedIn = false
 	a.library.reset()
 	a.notifications.reset()
+	a.discussion.reset()
 	a.login.show(color, msg)
 	a.showPage(pageLogin)
 	a.tv.SetFocus(a.login.form)
@@ -209,6 +225,7 @@ func (a *App) onLoggedIn(u client.User) {
 	a.setStatus(statusOK, fmt.Sprintf("Welcome, %s. Loading the catalog...", u.Username))
 	a.startSync()
 	a.startAlerts()
+	a.startChat()
 	a.showPage(pageBrowser)
 	a.browser.search("")
 }
@@ -221,7 +238,7 @@ func (a *App) refreshHeader() {
 	name, _ := a.pages.GetFrontPage()
 	keys := "[gray]Ctrl+C quit[-]"
 	if a.loggedIn {
-		keys = a.syncLabel() + " " + a.alertsLabel() + " | [gray]F2 Browse F3 Library F4 Chat F5 Alerts F6 Help Ctrl+L logout[-]"
+		keys = a.syncLabel() + " " + a.alertsLabel() + " " + a.chatLabel() + " | [gray]F2 Browse F3 Library F4 Chat F5 Alerts F6 Help Ctrl+L logout[-]"
 	}
 	a.header.SetText(fmt.Sprintf(" [::b]MangaHub[::-] | %s | %s | %s", who, name, keys))
 }

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,9 @@ import (
 	"time"
 
 	"github.com/gdamore/tcell/v2"
+	"github.com/gin-gonic/gin"
+
+	"mangahub/internal/chat"
 
 	"mangahub/internal/tui/client"
 )
@@ -35,7 +39,23 @@ func fakeAPI(t *testing.T, h *harness) *httptest.Server {
 		w.WriteHeader(code)
 		json.NewEncoder(w).Encode(v)
 	}
+	// /ws is served by the real chat hub (B7); token "tok:<name>" is <name>.
+	gin.SetMode(gin.TestMode)
+	h.chat = chat.New(func(tok string) (int64, string, error) {
+		if name, ok := strings.CutPrefix(tok, "tok:"); ok && name != "" {
+			return 1, name, nil
+		}
+		return 0, "", errors.New("bad token")
+	})
+	t.Cleanup(h.chat.Close)
+	wsRouter := gin.New()
+	wsRouter.GET("/ws", h.chat.Handler())
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/ws" {
+			wsRouter.ServeHTTP(w, r)
+			return
+		}
 		h.requests.Add(1)
 		var raw map[string]any
 		json.NewDecoder(r.Body).Decode(&raw)
@@ -45,7 +65,7 @@ func fakeAPI(t *testing.T, h *harness) *httptest.Server {
 				body[k] = str
 			}
 		}
-		authed := r.Header.Get("Authorization") == "Bearer tok"
+		authed := strings.HasPrefix(r.Header.Get("Authorization"), "Bearer tok:")
 		switch {
 		case r.URL.Path == "/api/health":
 			write(w, 200, map[string]string{"status": "ok"})
@@ -60,7 +80,7 @@ func fakeAPI(t *testing.T, h *harness) *httptest.Server {
 				write(w, 401, map[string]string{"error": "invalid username or password"})
 				return
 			}
-			tok := "tok"
+			tok := "tok:" + body["username"]
 			if body["username"] == "expire" { // simulates a token the backend no longer accepts
 				tok = "expired"
 			}
@@ -166,8 +186,10 @@ type harness struct {
 	lastSessionID string                         // X-Session-ID of the last PUT
 	putChapters   []int                          // current_chapter of every PUT, in order
 
-	tcpAddr string // TCP sync address given to the app ("" = unreachable)
-	udpAddr string // UDP alerts address ("" = unreachable)
+	url     string       // fake backend base URL
+	chat    *chat.Server // real chat hub behind /ws
+	tcpAddr string       // TCP sync address given to the app ("" = unreachable)
+	udpAddr string       // UDP alerts address ("" = unreachable)
 }
 
 // start runs the app against the fake backend.
@@ -182,7 +204,15 @@ func startWith(t *testing.T, setup func(*harness)) *harness {
 	h := &harness{t: t}
 	setup(h)
 	srv := fakeAPI(t, h)
+	h.url = srv.URL
 	return h.run(srv.URL)
+}
+
+// another starts a second TUI against the same fake backend (and the same
+// TCP/UDP servers), like opening a new terminal window.
+func (h *harness) another() *harness {
+	h2 := &harness{t: h.t, tcpAddr: h.tcpAddr, udpAddr: h.udpAddr, url: h.url}
+	return h2.run(h.url)
 }
 
 // run starts the real App on a simulation screen against backend httpURL.

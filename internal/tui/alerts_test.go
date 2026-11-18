@@ -21,7 +21,7 @@ func startNotifier(t *testing.T) (*udpnotify.Notifier, string) {
 		t.Fatal(err)
 	}
 	n := udpnotify.New(func(tok string) (int64, error) {
-		if tok == "tok" {
+		if strings.HasPrefix(tok, "tok:") {
 			return 1, nil
 		}
 		return 0, errors.New("bad token")

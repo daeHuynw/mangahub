@@ -50,3 +50,11 @@ reported it in `notes/defects.md` instead of changing it.
   and the assignment's language rule before pushing.
 - The AI warned that `go test -race` might not work with the 32-bit MinGW gcc on this machine. We
   checked `go env CC` (64-bit w64devkit) and ran it: it works.
+- In the chat client the AI used two separate `defer`s: "close the stop channel" and "wait for the
+  writer goroutine". Defers run in reverse order, so it waited for the writer, which was waiting for
+  `stop`: `Run` never returned after cancel. Every wsclient test that cancelled timed out; fixed by
+  closing and waiting in one defer.
+- The AI's Discussion screen scrolled the message view from `TextView.SetChangedFunc`. tview calls that
+  callback from its own goroutine, so it touched a widget outside the event loop. `go test -race` caught
+  it on the first run; removed (render() already scrolls inside the event loop).
+

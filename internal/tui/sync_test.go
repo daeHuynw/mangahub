@@ -32,7 +32,7 @@ func startSyncServer(t *testing.T, addr string) *syncServer {
 	}
 	hub := tcpsync.NewHub()
 	srv := tcpsync.NewServer(hub, func(tok string) (int64, error) {
-		if tok == "tok" {
+		if strings.HasPrefix(tok, "tok:") {
 			return 1, nil
 		}
 		return 0, errors.New("bad token")
