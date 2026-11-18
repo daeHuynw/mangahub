@@ -42,7 +42,9 @@ type App struct {
 	library *libraryView
 	help    *helpView
 
-	loggedIn bool // only read/written in the event loop
+	loggedIn bool      // only read/written in the event loop
+	sync     syncState // TCP progress sync (event loop only)
+	done     chan struct{}
 }
 
 // Option customises an App (used by tests to inject a simulation screen).
@@ -60,6 +62,7 @@ func New(cfg Config, opts ...Option) *App {
 		pages:  tview.NewPages(),
 		header: tview.NewTextView().SetDynamicColors(true),
 		status: tview.NewTextView().SetDynamicColors(true),
+		done:   make(chan struct{}),
 	}
 	a.login = newLoginView(a)
 	a.browser = newBrowserView(a)
@@ -85,8 +88,27 @@ func New(cfg Config, opts ...Option) *App {
 	return a
 }
 
-// Run blocks until the user quits (Ctrl+C).
-func (a *App) Run() error { return a.tv.Run() }
+// Run blocks until the user quits (Ctrl+C), then closes the TCP session.
+func (a *App) Run() error {
+	err := a.tv.Run()
+	close(a.done)
+	if a.sync.cancel != nil {
+		a.sync.cancel() // the event loop is gone; nothing else touches sync now
+	}
+	return err
+}
+
+// post runs f in the event loop and redraws. Called from network goroutines.
+// After Run returned it does nothing: QueueUpdate would block forever with no
+// event loop to execute it.
+func (a *App) post(f func()) {
+	select {
+	case <-a.done:
+		return
+	default:
+	}
+	a.tv.QueueUpdateDraw(f)
+}
 
 // Stop ends Run; safe to call from any goroutine.
 func (a *App) Stop() { a.tv.Stop() }
@@ -99,7 +121,7 @@ func runAsync[T any](a *App, work func(ctx context.Context) (T, error), done fun
 		ctx, cancel := context.WithTimeout(context.Background(), client.DefaultTimeout)
 		defer cancel()
 		v, err := work(ctx)
-		a.tv.QueueUpdateDraw(func() { done(v, err) })
+		a.post(func() { done(v, err) })
 	}()
 }
 
@@ -144,6 +166,7 @@ func (a *App) sessionExpired(err error) bool {
 	if client.StatusOf(err) != http.StatusUnauthorized {
 		return false
 	}
+	a.stopSync()
 	a.api.Logout()
 	a.loggedIn = false
 	a.library.reset()
@@ -157,6 +180,7 @@ func (a *App) sessionExpired(err error) bool {
 func (a *App) onLoggedIn(u client.User) {
 	a.loggedIn = true
 	a.setStatus(statusOK, fmt.Sprintf("Welcome, %s. Loading the catalog...", u.Username))
+	a.startSync()
 	a.showPage(pageBrowser)
 	a.browser.search("")
 }
@@ -169,7 +193,7 @@ func (a *App) refreshHeader() {
 	name, _ := a.pages.GetFrontPage()
 	keys := "[gray]Ctrl+C quit[-]"
 	if a.loggedIn {
-		keys = "[gray]F2 Browse  F3 Library  F4 Chat  F5 Alerts  F6 Help  Ctrl+C quit[-]"
+		keys = a.syncLabel() + " | [gray]F2 Browse  F3 Library  F4 Chat  F5 Alerts  F6 Help  Ctrl+C quit[-]"
 	}
 	a.header.SetText(fmt.Sprintf(" [::b]MangaHub[::-] | %s | %s | %s", who, name, keys))
 }

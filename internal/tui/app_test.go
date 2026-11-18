@@ -103,6 +103,7 @@ func fakeAPI(t *testing.T, h *harness) *httptest.Server {
 			h.libMu.Lock()
 			defer h.libMu.Unlock()
 			it := h.lib[id]
+			h.lastSessionID = r.Header.Get("X-Session-ID")
 			if it == nil {
 				write(w, 404, map[string]string{"error": "manga is not in your library"})
 				return
@@ -158,8 +159,11 @@ type harness struct {
 	// failEmptySearch makes the fake answer 503 to the full-catalog query.
 	failEmptySearch atomic.Bool
 
-	libMu sync.Mutex
-	lib   map[string]*client.LibraryItem // the fake backend's library
+	libMu         sync.Mutex
+	lib           map[string]*client.LibraryItem // the fake backend's library
+	lastSessionID string                         // X-Session-ID of the last PUT
+
+	tcpAddr string // TCP sync address given to the app ("" = unreachable)
 }
 
 // start runs the app against the fake backend.
@@ -182,7 +186,11 @@ func (h *harness) run(httpURL string) *harness {
 	t := h.t
 	t.Helper()
 	h.screen = tcell.NewSimulationScreen("UTF-8")
-	h.a = New(Config{HTTP: httpURL, TCP: "localhost:9090", UDP: "localhost:9091"}, WithScreen(h.screen))
+	tcp := h.tcpAddr
+	if tcp == "" {
+		tcp = "127.0.0.1:1" // nothing listens: the sync client just keeps retrying in the background
+	}
+	h.a = New(Config{HTTP: httpURL, TCP: tcp, UDP: "localhost:9091"}, WithScreen(h.screen))
 	h.screen.SetSize(120, 40)
 	done := make(chan error, 1)
 	go func() { done <- h.a.Run() }()

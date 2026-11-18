@@ -293,6 +293,24 @@ func (v *libraryView) update(it client.LibraryItem, chapter int, status string, 
 	})
 }
 
+// applyRemote merges a progress_updated event pushed over TCP by another
+// session of the same user. Event loop only.
+func (v *libraryView) applyRemote(p client.Progress) {
+	if !v.loaded {
+		return // the next open() loads fresh data anyway
+	}
+	if _, known := v.state.get(p.MangaID); !known {
+		v.reload() // added in the other session after our last load
+		return
+	}
+	if !v.state.apply(p) {
+		return // our own answer already had this version, or it is older
+	}
+	v.render()
+	it, _ := v.state.get(p.MangaID)
+	v.a.setStatus(statusOK, fmt.Sprintf("Synced from another session: %s chapter %d (v%d).", it.Title, p.CurrentChapter, p.Version))
+}
+
 // add puts a manga in the library (from the browser). Event loop only.
 func (v *libraryView) add(m client.Manga) {
 	if v.pendingAdd[m.ID] {

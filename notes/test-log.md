@@ -104,3 +104,23 @@ Windows 11, 2026-11-18. Real catalog + backend on fresh DBs, flows driven by `Te
 | F03 persistence | second TUI session logs in | same row 25 / v3 | OK |
 | F03 persistence | backend restarted, `GET /api/library` | row kept | `current_chapter 25, version 3` |
 | F06 gRPC | first catalog call right after backend start | 200 | **503 after 2 s** on this machine, see `notes/defects.md` D1 |
+
+## Progress sync over TCP through the TUI (member B, B5)
+
+Windows 11, 2026-11-18. Real catalog + backend, three TUIs driven by `TestE2E_RealBackend`
+(A and B = same user, C = another user). Backend log lines quoted as observed.
+
+| Feature / protocol | Condition | Expected | Observed |
+| --- | --- | --- | --- |
+| F03 TCP | A and B log in as the same user | two sessions in the hub | `tcpsync: user 2 +s1`, `+s2 (2 session(s))`; header shows "sync on" |
+| F03 TCP | C logs in | own session | `tcpsync: user 3 +s3` |
+| F03 TCP | A presses `+` in My Library (PUT with `X-Session-ID: s1`) | only B gets the event, B redraws without a key press | `one-piece=26 v4 pushed to 1 session(s)`; B shows 26 / v4 and "Synced from another session" 41 ms after A's key |
+| F03 isolation | same moment, C's TUI | nothing | C's status and library unchanged |
+| F03 TCP | all TUIs closed | sessions removed | `-s1`, `-s2`, `-s3` |
+
+Automated (`internal/tui/tcpclient`, against A's real `tcpsync.Server`): auth + event, other sessions
+only, rejected token stops without retrying, reconnect after server restart, backend not running keeps
+retrying, cancel closes the session, ping keeps an idle session alive, silent server detected after
+ReadTimeout, malformed line skipped, one event split across two writes. UI (`internal/tui/sync_test.go`):
+pushed update shown, own PUT carries the session id, older version ignored, reconnect reloads the library,
+unknown manga reloads, expired session closes the TCP session.
