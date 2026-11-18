@@ -1,6 +1,7 @@
-// DRAFT written from notes/contracts.md section 7 so the backend (member A)
-// can compile against real stubs. Owner: member B — replace/extend freely,
-// but tell A if a message or field name changes.
+// Catalog Service contract (notes/contracts.md section 7).
+// Server: internal/catalog (member B). Client: internal/api (member A).
+// Do not rename or renumber existing fields; add new ones instead and
+// regenerate with scripts/gen-proto.sh.
 syntax = "proto3";
 
 package catalog.v1;
