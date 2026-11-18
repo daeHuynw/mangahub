@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
@@ -24,6 +25,7 @@ const (
 	pageBrowser = "browser"
 	pageLibrary = "library"
 	pageUpdate  = "update" // Update Chapter dialog, shown over the library
+	pageNotify  = "notifications"
 	pageHelp    = "help"
 )
 
@@ -37,13 +39,15 @@ type App struct {
 	header *tview.TextView
 	status *tview.TextView
 
-	login   *loginView
-	browser *browserView
-	library *libraryView
-	help    *helpView
+	login         *loginView
+	browser       *browserView
+	library       *libraryView
+	notifications *notificationsView
+	help          *helpView
 
-	loggedIn bool      // only read/written in the event loop
-	sync     syncState // TCP progress sync (event loop only)
+	loggedIn bool       // only read/written in the event loop
+	sync     syncState  // TCP progress sync (event loop only)
+	alerts   alertState // UDP chapter alerts (event loop only)
 	done     chan struct{}
 }
 
@@ -67,11 +71,13 @@ func New(cfg Config, opts ...Option) *App {
 	a.login = newLoginView(a)
 	a.browser = newBrowserView(a)
 	a.library = newLibraryView(a)
+	a.notifications = newNotificationsView(a)
 	a.help = newHelpView(a)
 
 	a.pages.AddPage(pageLogin, a.login.root, true, true)
 	a.pages.AddPage(pageBrowser, a.browser.root, true, false)
 	a.pages.AddPage(pageLibrary, a.library.root, true, false)
+	a.pages.AddPage(pageNotify, a.notifications.root, true, false)
 	a.pages.AddPage(pageHelp, a.help.root, true, false)
 
 	root := tview.NewFlex().SetDirection(tview.FlexRow).
@@ -88,12 +94,18 @@ func New(cfg Config, opts ...Option) *App {
 	return a
 }
 
-// Run blocks until the user quits (Ctrl+C), then closes the TCP session.
+// Run blocks until the user quits (Ctrl+C), then closes the TCP session and
+// unsubscribes from alerts.
 func (a *App) Run() error {
 	err := a.tv.Run()
 	close(a.done)
+	// The event loop is gone, so nothing else touches sync/alerts now.
 	if a.sync.cancel != nil {
-		a.sync.cancel() // the event loop is gone; nothing else touches sync now
+		a.sync.cancel()
+	}
+	if a.alerts.cancel != nil {
+		a.alerts.cancel()
+		a.waitAlerts(500 * time.Millisecond)
 	}
 	return err
 }
@@ -135,10 +147,14 @@ func (a *App) globalKeys(ev *tcell.EventKey) *tcell.EventKey {
 		a.showPage(pageBrowser)
 	case tcell.KeyF3:
 		a.showPage(pageLibrary)
-	case tcell.KeyF4, tcell.KeyF5:
+	case tcell.KeyF4:
 		a.setStatus(statusWarn, "This screen is not available yet.")
+	case tcell.KeyF5:
+		a.showPage(pageNotify)
 	case tcell.KeyF6:
 		a.showPage(pageHelp)
+	case tcell.KeyCtrlL:
+		a.endSession("green", "Logged out.")
 	default:
 		return ev
 	}
@@ -154,6 +170,8 @@ func (a *App) showPage(name string) {
 		a.browser.focus()
 	case pageLibrary:
 		a.library.open()
+	case pageNotify:
+		a.notifications.open()
 	case pageHelp:
 		a.help.open()
 	}
@@ -166,14 +184,23 @@ func (a *App) sessionExpired(err error) bool {
 	if client.StatusOf(err) != http.StatusUnauthorized {
 		return false
 	}
+	a.endSession("red", "Your session expired. Please log in again.")
+	return true
+}
+
+// endSession logs out locally: closes the TCP session, unsubscribes from
+// UDP alerts, forgets the token and per-user data, shows the login form.
+func (a *App) endSession(color, msg string) {
 	a.stopSync()
+	a.stopAlerts()
 	a.api.Logout()
 	a.loggedIn = false
 	a.library.reset()
-	a.login.show("red", "Your session expired. Please log in again.")
+	a.notifications.reset()
+	a.login.show(color, msg)
 	a.showPage(pageLogin)
 	a.tv.SetFocus(a.login.form)
-	return true
+	a.setStatus(statusInfo, msg)
 }
 
 // onLoggedIn is called (in the event loop) after a successful login.
@@ -181,6 +208,7 @@ func (a *App) onLoggedIn(u client.User) {
 	a.loggedIn = true
 	a.setStatus(statusOK, fmt.Sprintf("Welcome, %s. Loading the catalog...", u.Username))
 	a.startSync()
+	a.startAlerts()
 	a.showPage(pageBrowser)
 	a.browser.search("")
 }
@@ -193,7 +221,7 @@ func (a *App) refreshHeader() {
 	name, _ := a.pages.GetFrontPage()
 	keys := "[gray]Ctrl+C quit[-]"
 	if a.loggedIn {
-		keys = a.syncLabel() + " | [gray]F2 Browse  F3 Library  F4 Chat  F5 Alerts  F6 Help  Ctrl+C quit[-]"
+		keys = a.syncLabel() + " " + a.alertsLabel() + " | [gray]F2 Browse F3 Library F4 Chat F5 Alerts F6 Help Ctrl+L logout[-]"
 	}
 	a.header.SetText(fmt.Sprintf(" [::b]MangaHub[::-] | %s | %s | %s", who, name, keys))
 }

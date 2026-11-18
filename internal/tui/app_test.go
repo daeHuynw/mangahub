@@ -2,6 +2,7 @@ package tui
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -109,6 +110,7 @@ func fakeAPI(t *testing.T, h *harness) *httptest.Server {
 				return
 			}
 			ch, _ := raw["current_chapter"].(float64)
+			h.putChapters = append(h.putChapters, int(ch))
 			if ch == 13 { // a rejection the TUI's own check cannot predict
 				write(w, 400, map[string]string{"error": "current_chapter must be between 0 and 12"})
 				return
@@ -162,8 +164,10 @@ type harness struct {
 	libMu         sync.Mutex
 	lib           map[string]*client.LibraryItem // the fake backend's library
 	lastSessionID string                         // X-Session-ID of the last PUT
+	putChapters   []int                          // current_chapter of every PUT, in order
 
 	tcpAddr string // TCP sync address given to the app ("" = unreachable)
+	udpAddr string // UDP alerts address ("" = unreachable)
 }
 
 // start runs the app against the fake backend.
@@ -190,7 +194,11 @@ func (h *harness) run(httpURL string) *harness {
 	if tcp == "" {
 		tcp = "127.0.0.1:1" // nothing listens: the sync client just keeps retrying in the background
 	}
-	h.a = New(Config{HTTP: httpURL, TCP: tcp, UDP: "localhost:9091"}, WithScreen(h.screen))
+	udp := h.udpAddr
+	if udp == "" {
+		udp = "127.0.0.1:1" // no notifier: alerts end up in "no ack", which is fine here
+	}
+	h.a = New(Config{HTTP: httpURL, TCP: tcp, UDP: udp}, WithScreen(h.screen))
 	h.screen.SetSize(120, 40)
 	done := make(chan error, 1)
 	go func() { done <- h.a.Run() }()
@@ -574,4 +582,37 @@ func TestUI_EmptyLibrary(t *testing.T) {
 	if p := h.page(); p != pageLibrary {
 		t.Fatalf("page = %s", p)
 	}
+}
+
+// Two quick "+" presses must not send the same "+1" twice (both used to read
+// the old chapter before the first answer arrived).
+func TestUI_QuickPlusDoesNotSendDuplicates(t *testing.T) {
+	h := start(t)
+	h.login("alice", "secret123")
+	h.waitFor("catalog", func() bool { return h.a.browser.list.GetItemCount() == 3 })
+	h.typeText("a")
+	h.waitFor("added", func() bool { return strings.Contains(h.a.status.GetText(true), "Added") })
+	h.key(tcell.KeyF3)
+	h.waitFor("row", func() bool { return h.cell(1, 2) == "0 / 1130" })
+
+	h.typeText("+++++") // five presses in one burst
+	h.waitFor("settled", func() bool { return len(h.a.library.inFlight) == 0 && h.cell(1, 2) != "0 / 1130" })
+	time.Sleep(100 * time.Millisecond)
+
+	h.libMu.Lock()
+	puts := append([]int(nil), h.putChapters...)
+	h.libMu.Unlock()
+	seen := map[int]bool{}
+	for _, ch := range puts {
+		if seen[ch] {
+			t.Fatalf("chapter %d sent twice: %v", ch, puts)
+		}
+		seen[ch] = true
+	}
+	var shown string
+	h.ui(func() { shown = h.cell(1, 2) })
+	if want := fmt.Sprintf("%d / 1130", len(puts)); shown != want {
+		t.Fatalf("row shows %q after PUTs %v, want %q", shown, puts, want)
+	}
+	t.Logf("5 presses -> PUTs %v", puts)
 }

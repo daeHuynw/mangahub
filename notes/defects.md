@@ -58,3 +58,37 @@ both the local range check and a 400 from the backend.
 
 **Retest.** `TestUI_LibraryAddEditAndValidate` types 9999, gets the error, then types 13 directly
 and sees the backend's 400 message (passes with `-race`).
+
+## D3. Logout left the UDP subscription alive for 90 s
+
+Found by: member B, 2026-11-18, by `TestUI_LogoutUnsubscribes`. **Status: fixed in B6.**
+
+**Symptom.** After Ctrl+L the server still listed the TUI's address and a release was sent to it
+(quitting with Ctrl+C was fine).
+
+**Cause.** `endSession` cancels the UDP client and then calls `api.Logout()`, which clears the JWT.
+The client goroutine read the token only when building the `unsubscribe` datagram, i.e. after it was
+cleared, so it sent an empty token; the notifier answered "invalid token" and kept the subscriber
+until its 90 s TTL. Quit worked only because the token was still set at that moment: a timing bug.
+
+**Fix.** `udpclient.Run` keeps the token of the last subscribe and uses it for unsubscribe.
+
+**Retest.** `TestUnsubscribeAfterTokenCleared` (token cleared before cancel) and the UI logout test both
+pass; live run: `udpnotify: unsubscribe 127.0.0.1:52936` right after C's logout.
+
+## D4. Two quick "+" presses sent the same chapter twice
+
+Found by: member B, 2026-11-18, code review of B4. **Status: fixed.**
+
+**Symptom.** Five fast "+" presses on one row produced PUTs `[1 2 3 3 3]`: some presses were lost and
+the server got duplicate updates (each still bumped the version).
+
+**Cause.** Each press computed `current_chapter + 1` from the row on screen. Until the previous PUT
+answered, the row still showed the old chapter, so several presses sent the same value.
+
+**Fix.** One progress request per manga at a time (`libraryView.inFlight`); a press during a save shows
+"Still saving the previous change...".
+
+**Retest.** `TestUI_QuickPlusDoesNotSendDuplicates`: five presses give `[1 2 3]`, no duplicates, and
+the row matches the last PUT. With the fix removed the same test fails with `chapter 3 sent twice`.
+

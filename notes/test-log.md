@@ -124,3 +124,29 @@ retrying, cancel closes the session, ping keeps an idle session alive, silent se
 ReadTimeout, malformed line skipped, one event split across two writes. UI (`internal/tui/sync_test.go`):
 pushed update shown, own PUT carries the session id, older version ignored, reconnect reloads the library,
 unknown manga reloads, expired session closes the TCP session.
+
+## New-chapter alerts over UDP through the TUI (member B, B6)
+
+Windows 11, 2026-11-18. Same live run as B5 (A and B = same user, C = another user), then a release
+through the admin endpoint. Backend log lines quoted as observed.
+
+| Feature / protocol | Condition | Expected | Observed |
+| --- | --- | --- | --- |
+| F04 UDP | A, B, C log in | each TUI subscribes from its own port | `subscribe user 2 from 127.0.0.1:52934`, `:52935`, `subscribe user 3 from :52936`; header "alerts on" |
+| F04 UDP | C presses Ctrl+L (logout) | unsubscribe + TCP session closed | `unsubscribe 127.0.0.1:52936`, `tcpsync: user 3 -s3` |
+| F04 UDP | `POST /api/admin/manga/one-piece/release` (1131) | 2 subscribers get `new_chapter`, shown inside the TUI | `sent to 2/2 subscriber(s)`, response `notified: 2`; A and B show "New chapter: One Piece now has 1131" 22 ms later; B's library row becomes 26 / 1131 |
+| F04 UDP | same release, C (unsubscribed) | nothing | C has no alert |
+| F04 UDP | A and B quit | unsubscribe before exit | `unsubscribe 127.0.0.1:52935`, `:52934` |
+
+Automated (`internal/tui/udpclient`, against A's real `udpnotify.Notifier`): subscribe + alert, two
+subscribed and one silent socket (only 2 sent), cancel sends unsubscribe, unsubscribe after the token was
+cleared (regression, see below), forged token rejected, server down then up (3 tries, NoAck, heartbeat
+subscribes; Windows "connection reset" read errors ignored), first two acks lost then subscribed on the
+3rd try, heartbeat keeps the subscription past a short TTL, malformed datagram ignored. UI
+(`internal/tui/alerts_test.go`): alert updates status bar, unread counter, library and browser counts;
+F5 list and unread reset; Ctrl+L and quit both unsubscribe.
+
+Defect found by `TestUI_LogoutUnsubscribes`: logout cleared the JWT right after cancelling the UDP client,
+which then sent `unsubscribe` with an empty token; the server answered "invalid token" and kept sending
+alerts to the old port until the 90 s TTL. Fix: unsubscribe reuses the token of the last subscribe.
+Retest: the UI test and `TestUnsubscribeAfterTokenCleared` pass.

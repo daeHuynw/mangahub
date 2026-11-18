@@ -37,6 +37,7 @@ type libraryView struct {
 	editing    string // manga id open in the dialog
 	saving     bool
 	pendingAdd map[string]bool // manga ids with an add request in flight
+	inFlight   map[string]bool // manga ids with a progress update in flight
 }
 
 func newLibraryView(a *App) *libraryView {
@@ -44,6 +45,7 @@ func newLibraryView(a *App) *libraryView {
 		a:          a,
 		table:      tview.NewTable().SetSelectable(true, false).SetFixed(1, 0),
 		pendingAdd: map[string]bool{},
+		inFlight:   map[string]bool{},
 	}
 	v.table.SetBorder(true).SetTitle(" My Library ")
 	v.table.SetSelectedFunc(func(row, _ int) { v.openDialog(row) })
@@ -96,6 +98,8 @@ func (v *libraryView) reset() {
 	v.loaded = false
 	v.loadSeq++
 	v.editing = ""
+	v.inFlight = map[string]bool{}
+	v.pendingAdd = map[string]bool{}
 	v.render()
 }
 
@@ -112,6 +116,12 @@ func (v *libraryView) keys(ev *tcell.EventKey) *tcell.EventKey {
 		step := 1
 		if ev.Rune() == '-' {
 			step = -1
+		}
+		// One request per manga at a time: two quick presses would both read
+		// the same old chapter and send the same "+1" twice.
+		if v.inFlight[it.MangaID] {
+			v.a.setStatus(statusWarn, "Still saving the previous change...")
+			return nil
 		}
 		ch := it.CurrentChapter + step
 		if ch < 0 || ch > it.TotalChapters {
@@ -267,10 +277,12 @@ func (v *libraryView) formError(msg string) {
 // done (optional) runs after the answer is applied.
 func (v *libraryView) update(it client.LibraryItem, chapter int, status string, done func(error)) {
 	api := v.a.api
+	v.inFlight[it.MangaID] = true
 	v.a.setStatus(statusInfo, fmt.Sprintf("Saving %s chapter %d...", it.Title, chapter))
 	runAsync(v.a, func(ctx context.Context) (client.Progress, error) {
 		return api.UpdateProgress(ctx, it.MangaID, chapter, status)
 	}, func(p client.Progress, err error) {
+		delete(v.inFlight, it.MangaID)
 		if err != nil {
 			if v.a.sessionExpired(err) {
 				return

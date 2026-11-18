@@ -1,7 +1,9 @@
 package tui
 
 import (
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 	"testing"
@@ -10,6 +12,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 
 	"mangahub/internal/tui/tcpclient"
+	"mangahub/internal/tui/udpclient"
 )
 
 // TestE2E_RealBackend drives the real TUI (on a simulation screen) against a
@@ -24,7 +27,7 @@ func TestE2E_RealBackend(t *testing.T) {
 	if base == "" {
 		t.Skip("set MANGAHUB_E2E_HTTP to run against a live backend")
 	}
-	h := (&harness{t: t, tcpAddr: e2eTCP()}).run(base)
+	h := (&harness{t: t, tcpAddr: e2eTCP(), udpAddr: e2eUDP()}).run(base)
 	user := fmt.Sprintf("e2e%d", time.Now().UnixNano()%1_000_000_000)
 	step := func(name string, start time.Time) {
 		t.Logf("ok   %-48s %s", name, time.Since(start).Round(time.Millisecond))
@@ -141,7 +144,7 @@ func TestE2E_RealBackend(t *testing.T) {
 
 	// Persistence: a brand-new TUI session (fresh login) sees the same row.
 	s = time.Now()
-	h2 := (&harness{t: t, tcpAddr: e2eTCP()}).run(base)
+	h2 := (&harness{t: t, tcpAddr: e2eTCP(), udpAddr: e2eUDP()}).run(base)
 	h2.login(user, "secret123")
 	h2.waitFor("second session logged in", func() bool { return h2.a.loggedIn })
 	h2.key(tcell.KeyF3)
@@ -163,7 +166,7 @@ func TestE2E_RealBackend(t *testing.T) {
 	// User C on a third TUI: connected too, must not see A's private event.
 	s = time.Now()
 	other := fmt.Sprintf("c%d", time.Now().UnixNano()%1_000_000_000)
-	h3 := (&harness{t: t, tcpAddr: e2eTCP()}).run(base)
+	h3 := (&harness{t: t, tcpAddr: e2eTCP(), udpAddr: e2eUDP()}).run(base)
 	h3.typeText(other)
 	h3.key(tcell.KeyEnter)
 	h3.typeText("secret123")
@@ -193,6 +196,71 @@ func TestE2E_RealBackend(t *testing.T) {
 		t.Fatalf("user C saw user A's event: status %q, %d rows", cStatus, cRows)
 	}
 	step("user C received nothing", time.Now())
+
+	// F04: A and B are subscribed to UDP alerts; C logs out (unsubscribe).
+	s = time.Now()
+	h.waitFor("A subscribed", func() bool { return h.a.alerts.state == udpclient.Subscribed })
+	h2.waitFor("B subscribed", func() bool { return h2.a.alerts.state == udpclient.Subscribed })
+	h3.screen.InjectKey(tcell.KeyCtrlL, 0, tcell.ModCtrl)
+	h3.waitFor("C logged out", func() bool { return !h3.a.loggedIn })
+	time.Sleep(200 * time.Millisecond) // let the unsubscribe datagram arrive
+	step("A, B subscribed; C logged out (unsubscribed)", s)
+
+	s = time.Now()
+	var total int
+	h.ui(func() { it, _ := h.a.library.state.get("one-piece"); total = it.TotalChapters })
+	notified := release(t, base, "one-piece", total+1)
+	h.waitFor("A alert", func() bool {
+		return strings.Contains(h.a.status.GetText(true), fmt.Sprintf("now has %d chapters", total+1))
+	})
+	h2.waitFor("B alert and library count", func() bool {
+		return len(h2.a.notifications.items) == 1 && h2.cell(1, 2) == fmt.Sprintf("26 / %d", total+1)
+	})
+	step(fmt.Sprintf("release one-piece -> %d: notified=%d, A and B show the alert", total+1, notified), s)
+
+	time.Sleep(300 * time.Millisecond)
+	var cItems int
+	h3.ui(func() { cItems = len(h3.a.notifications.items) })
+	if cItems != 0 {
+		t.Fatalf("logged-out user C got %d alert(s)", cItems)
+	}
+	step("C (unsubscribed) got no alert", time.Now())
+}
+
+// release calls the admin endpoint (POST /api/admin/manga/:id/release) and
+// returns the backend's "notified" count.
+func release(t *testing.T, base, id string, total int) int {
+	t.Helper()
+	key := os.Getenv("MANGAHUB_E2E_ADMIN_KEY")
+	if key == "" {
+		key = "dev-admin-key"
+	}
+	body := strings.NewReader(fmt.Sprintf(`{"total_chapters":%d}`, total))
+	req, _ := http.NewRequest(http.MethodPost, base+"/api/admin/manga/"+id+"/release", body)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Admin-Key", key)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var out struct {
+		Notified int    `json:"notified"`
+		Error    string `json:"error"`
+	}
+	json.NewDecoder(resp.Body).Decode(&out)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("release: HTTP %d %s", resp.StatusCode, out.Error)
+	}
+	return out.Notified
+}
+
+// e2eUDP is the alerts address for live runs (MANGAHUB_E2E_UDP, default :9091).
+func e2eUDP() string {
+	if v := os.Getenv("MANGAHUB_E2E_UDP"); v != "" {
+		return v
+	}
+	return "localhost:9091"
 }
 
 // e2eTCP is the sync address for live runs (MANGAHUB_E2E_TCP, default :9090).

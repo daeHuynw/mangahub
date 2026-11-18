@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 
 	"mangahub/internal/tui/client"
 	"mangahub/internal/tui/tcpclient"
@@ -17,6 +18,7 @@ type syncState struct {
 	connects  int                // successful auth_ok count (>1 means we reconnected)
 	gen       int                // bumped on every start/stop; drops callbacks of an old session
 	cancel    context.CancelFunc // stops the running tcpclient.Run
+	active    *atomic.Bool       // false once this session was stopped (read from its goroutine)
 }
 
 // startSync opens the TCP session after login. Event loop only.
@@ -25,7 +27,9 @@ func (a *App) startSync() {
 	a.sync.gen++
 	gen := a.sync.gen
 	ctx, cancel := context.WithCancel(context.Background())
-	a.sync.cancel = cancel
+	active := &atomic.Bool{}
+	active.Store(true)
+	a.sync.cancel, a.sync.active = cancel, active
 	a.sync.state = tcpclient.Connecting
 
 	cfg := tcpclient.Config{Addr: a.cfg.TCP, Token: a.api.Token}
@@ -33,11 +37,15 @@ func (a *App) startSync() {
 		OnState: func(s tcpclient.State, sid string, err error) {
 			// Set the session id right here, not in the UI callback: the next
 			// HTTP PUT must already carry X-Session-ID so the backend does not
-			// echo our own change back to us.
-			if s == tcpclient.Connected {
-				a.api.SetSessionID(sid)
-			} else {
-				a.api.SetSessionID("")
+			// echo our own change back to us. A stopped session must not touch
+			// it any more: after logout + quick login its late "Stopped" would
+			// otherwise wipe the new session's id.
+			if active.Load() {
+				if s == tcpclient.Connected {
+					a.api.SetSessionID(sid)
+				} else {
+					a.api.SetSessionID("")
+				}
 			}
 			a.post(func() {
 				if gen == a.sync.gen {
@@ -58,6 +66,10 @@ func (a *App) startSync() {
 
 // stopSync closes the TCP session (logout, expired token, quit).
 func (a *App) stopSync() {
+	if a.sync.active != nil {
+		a.sync.active.Store(false)
+		a.sync.active = nil
+	}
 	if a.sync.cancel != nil {
 		a.sync.cancel()
 		a.sync.cancel = nil

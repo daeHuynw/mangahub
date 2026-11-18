@@ -234,3 +234,25 @@ func (v *browserView) loadDetails(i int) {
 		v.details.SetText(detailsText(r.m, r.cache)).ScrollToBeginning()
 	})
 }
+
+// updateTotal applies a new-chapter alert to the browser rows and, if that
+// manga is selected, reloads its details. Event loop only.
+func (v *browserView) updateTotal(mangaID string, total int) {
+	// shown first: with "All genres" it is the same backing array as results,
+	// so updating results first would make this loop skip the label.
+	for i := range v.shown {
+		if v.shown[i].ID != mangaID || total <= v.shown[i].TotalChapters {
+			continue
+		}
+		v.shown[i].TotalChapters = total
+		v.list.SetItemText(i, listLabel(v.shown[i]), "")
+		if v.list.GetCurrentItem() == i {
+			v.loadDetails(i)
+		}
+	}
+	for i := range v.results {
+		if v.results[i].ID == mangaID && total > v.results[i].TotalChapters {
+			v.results[i].TotalChapters = total
+		}
+	}
+}

@@ -10,6 +10,7 @@ import (
 	"github.com/rivo/tview"
 
 	"mangahub/internal/tui/tcpclient"
+	"mangahub/internal/tui/udpclient"
 )
 
 // helpView is the Connection Status / Help screen: configured addresses, a
@@ -80,12 +81,28 @@ func (v *helpView) syncLine() string {
 	return "[gray]not connected[-]"
 }
 
+// alertLine describes the UDP subscription for the status screen.
+func (v *helpView) alertLine() string {
+	s := v.a.alerts
+	switch s.state {
+	case udpclient.Subscribed:
+		return "[green]subscribed[-] (heartbeat every 30 s)"
+	case udpclient.Subscribing:
+		return "[yellow]subscribing...[-]"
+	case udpclient.NoAck:
+		return "[red]no ack[-], retrying on the next heartbeat"
+	case udpclient.Rejected:
+		return "[red]rejected[-]: " + tview.Escape(s.lastErr)
+	}
+	return "[gray]not subscribed[-]"
+}
+
 func (v *helpView) render() {
 	var b strings.Builder
 	fmt.Fprintf(&b, "[::b]Connections[::-]\n")
 	fmt.Fprintf(&b, "  HTTP backend  %s  %s\n", tview.Escape(v.a.cfg.HTTP), v.health)
 	fmt.Fprintf(&b, "  TCP sync      %s  %s\n", tview.Escape(v.a.cfg.TCP), v.syncLine())
-	fmt.Fprintf(&b, "  UDP alerts    %s  [gray]not subscribed yet[-]\n", tview.Escape(v.a.cfg.UDP))
+	fmt.Fprintf(&b, "  UDP alerts    %s  %s\n", tview.Escape(v.a.cfg.UDP), v.alertLine())
 	fmt.Fprintf(&b, "  Catalog       reached only through the backend (TUI -> HTTP -> Gin -> gRPC)\n\n")
 	fmt.Fprintf(&b, "[::b]Keys[::-]\n")
 	for _, k := range [][2]string{
@@ -95,7 +112,7 @@ func (v *helpView) render() {
 		{"Enter / + / -", "edit chapter, or one chapter up/down (library)"},
 		{"/", "focus the search box"}, {"Tab / Shift+Tab", "next / previous pane"},
 		{"Up / Down", "move in a list"}, {"Enter", "confirm / open details"},
-		{"Esc", "back"}, {"Ctrl+C", "quit"},
+		{"Esc", "back"}, {"Ctrl+L", "log out (closes TCP, unsubscribes UDP)"}, {"Ctrl+C", "quit"},
 	} {
 		fmt.Fprintf(&b, "  [yellow]%-16s[-] %s\n", k[0], k[1])
 	}
