@@ -18,6 +18,7 @@ import (
 	"mangahub/internal/api"
 	"mangahub/internal/auth"
 	"mangahub/internal/cache"
+	"mangahub/internal/chat"
 	"mangahub/internal/config"
 	"mangahub/internal/store"
 	"mangahub/internal/tcpsync"
@@ -84,7 +85,7 @@ func main() {
 		Sync:     hub,
 		Notify:   notifier,
 		AdminKey: cfg.AdminKey,
-		// WS: chat handler from internal/chat (member B) goes here.
+		WS:       chat.New(chat.JWTVerifier(jwt)).Handler(), // GET /ws, internal/chat (member B)
 	})
 	httpSrv := &http.Server{Addr: cfg.HTTPAddr, Handler: router, ReadHeaderTimeout: 5 * time.Second}
 	go func() {

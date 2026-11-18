@@ -92,3 +92,31 @@ answered, the row still showed the old chapter, so several presses sent the same
 **Retest.** `TestUI_QuickPlusDoesNotSendDuplicates`: five presses give `[1 2 3]`, no duplicates, and
 the row matches the last PUT. With the fix removed the same test fails with `chapter 3 sent twice`.
 
+## D5. TCP auth line without `\n` is accepted after the auth timeout (flaky test)
+
+Found by: member B, 2026-11-18, while running the full `go test -race ./...`. Owner: member A
+(`internal/tcpsync/tcpsync.go`, `handle`). **Status: open, needs A's fix.**
+
+**Symptom.** `TestMissingNewlineTimesOut` failed once in a full parallel run ("got a reply without a
+newline-terminated auth line") and passed 5/5 when run alone. The server log of a *passing* run still
+shows the session being created right at the 5 s timeout:
+
+```
+20:53:47 tcpsync: listening on 127.0.0.1:60942
+20:53:52 tcpsync: user 1 +s1 (1 session(s))   <- authenticated from a line with no `\n`
+20:53:52 tcpsync: user 1 -s1
+```
+
+**Cause.** When the read deadline expires, `conn.Read` returns an error while the bytes
+`{"type":"auth",...}` are still in the scanner's buffer. `bufio.Scanner` then calls the split function
+with `atEOF=true`, and `bufio.ScanLines` returns the leftover bytes as a final token even though there
+is no newline. `sc.Scan()` returns true, the server parses the JSON and authenticates. The next `Scan`
+fails at once, so the session is removed; whether `auth_ok` reaches the client before the socket closes
+is a race, hence the flaky test. The framing rule "one JSON object per line" is not enforced for the
+first message.
+
+**Fix (suggested, A's code).** After the first `sc.Scan()`, also reject when `sc.Err() != nil` (the
+scanner keeps the read error even when it hands out that final token), or use a split function that
+never returns a token without `\n`. Retest: the existing test, plus checking that the log has no
+`+s1` line.
+

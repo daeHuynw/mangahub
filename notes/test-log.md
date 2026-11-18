@@ -150,3 +150,27 @@ Defect found by `TestUI_LogoutUnsubscribes`: logout cleared the JWT right after 
 which then sent `unsubscribe` with an empty token; the server answered "invalid token" and kept sending
 alerts to the old port until the 90 s TTL. Fix: unsubscribe reuses the token of the last subscribe.
 Retest: the UI test and `TestUnsubscribeAfterTokenCleared` pass.
+
+## Room chat over WebSocket (member B, B7: server side)
+
+Windows 11, 2026-11-18. `internal/chat` mounted in the real backend through `api.Deps.WS`; the
+scenario ran with gorilla clients (`TestE2E_LiveBackend`), the TUI screen comes in B8.
+
+| Feature / protocol | Condition | Expected | Observed |
+| --- | --- | --- | --- |
+| F05 WS | `GET /ws?token=forged` | 401, no upgrade | `401 GET /ws?token=forged` |
+| F05 WS | alice, bob, charlie connect | all in `general` | `chat: ... connected (general: 1/2/3)` |
+| F05 WS | charlie joins `one-piece`, alice chats in `general` | bob gets it from "alice", charlie does not | OK |
+| F05 WS | charlie chats in `one-piece` | only charlie's room | charlie's next chat is his own; alice gets nothing |
+| F05 WS | bob's socket closed without a close frame | bob removed, others keep chatting | `read: close 1006 (abnormal closure)`, `disconnected from general`; alice gets "bob left" and her next message works |
+| F05 regression | full TUI e2e (F01-F04) with `/ws` mounted | still passes | passes |
+
+Automated (`internal/chat`, `-race`, 3 runs): 401 before upgrade (missing / forged token, header token
+accepted), Alice/Bob exchange with `from` taken from the token, room isolation, disconnect cleanup,
+validation errors keep the connection (empty, 501 chars, wrong room, bad room name, unknown type, bad
+JSON; 500 multi-byte characters accepted), 10 clients x 5 messages concurrently, a peer that stops
+answering pings is removed after pongWait, a live peer stays, Close sends a close frame. Contract test
+through A's router with a real JWT from A's login endpoint.
+
+Note: Gin's request log prints the full URL, so `?token=<JWT>` ends up in the backend log. The TUI
+client (B8) sends the token in the `Authorization` header instead.
