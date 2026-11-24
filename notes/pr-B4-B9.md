@@ -1,7 +1,7 @@
 # PR: member B, catalog + TUI + chat (B1-B9) → main
 
-Branch: `docs/B9-report` → `main`. This replaces the open B3 PR (`feat/B3-tui-browser`):
-the branch contains B1-B3 as well, so the old PR can be closed.
+Branch: `docs/B9-report` → `main`. It contains B1-B3 too, so this is the only PR needed.
+`feat/B3-tui-browser` was pushed earlier but never opened as a PR; it can be deleted after merge.
 
 ## What is in it
 
