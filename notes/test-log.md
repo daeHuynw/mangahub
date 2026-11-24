@@ -195,3 +195,42 @@ server down keeps retrying, a silent server is detected after ReadTimeout). UI (
 three TUIs on one hub (Alice/Bob in #general, Charlie in #one-piece, Bob logs out, Alice sees "bob left"
 and keeps chatting), typing is not lost while messages arrive, local checks for room name and 500 chars,
 room list built from the library.
+
+## Manual check in a real console (to fill in by hand)
+
+Setup: `powershell -ExecutionPolicy Bypass -File scripts\demo.ps1` (or `scripts/demo.sh` on Linux),
+then three windows of cmd or PowerShell (not Git Bash) running `.\bin\tui.exe`:
+W1 = alice, W2 = alice, W3 = bob. Write the observed result and tick the box.
+
+| # | Window / action | Expected | Observed | OK |
+| --- | --- | --- | --- | --- |
+| 1 | W1: log in alice / wrongpass | "Wrong username or password", stays on login | | [ ] |
+| 2 | W1: log in alice / secret123 | Browser with 36 manga; header `sync on alerts on chat on` | | [ ] |
+| 3 | W2: log in alice, W3: log in bob | same header in both | | [ ] |
+| 4 | W1 F2: `/` piece Enter | one row One Piece, details show author, genres, status, chapters, description | | [ ] |
+| 5 | W1: `/` zzzzzz Enter | empty list, "No manga matches" | | [ ] |
+| 6 | W1: Tab to Genre, pick sports | only sports manga | | [ ] |
+| 7 | W1: select One Piece, press `a`, then `a` again | "Added One Piece", then "already in your library" | | [ ] |
+| 8 | W1 F3 | row One Piece, 0 / 1130, v1 | | [ ] |
+| 9 | W2 F3 | same row (reloaded over HTTP) | | [ ] |
+| 10 | W1: `+` three times (slowly) | W1 3 / 1130; W2 changes to 3 / 1130 without a key press; status "Synced from another session" | | [ ] |
+| 11 | W3 F3 | bob's library empty, nothing from alice | | [ ] |
+| 12 | W1: Enter, chapter 99999, Save | "Chapter must be between 0 and 1130", no request | | [ ] |
+| 13 | W1: Enter, chapter 25, status reading, Save | 25 / 1130 in W1 and W2 | | [ ] |
+| 14 | any terminal: release command from demo output (1131) | W1, W2, W3 show "New chapter: One Piece now has 1131"; header "(1 new)"; W1/W2 library 25 / 1131 | | [ ] |
+| 15 | W1 F5 | alert listed, unread counter gone | | [ ] |
+| 16 | W3: Ctrl+L, then release again (1132) | W3 back on login, gets nothing; W1, W2 get the alert; response `notified: 2` | | [ ] |
+| 17 | W3: log in bob again, all three F4 | each in #general; "joined" lines | | [ ] |
+| 18 | W3: `/join one-piece` | W3 title #one-piece; W1 sees "bob left" | | [ ] |
+| 19 | W1: type "hello" Enter | W2 shows "alice: hello"; W3 does not | | [ ] |
+| 20 | W3: type "spoilers" Enter | only W3 sees it | | [ ] |
+| 21 | W2: start typing a line, W1 sends a message | message appears in W2, the half-typed text stays | | [ ] |
+| 22 | W2: close the window (X) | W1 shows "alice left" (W2's session), chat keeps working | | [ ] |
+| 23 | F6 in W1 | HTTP reachable, TCP connected (session id), UDP subscribed, WebSocket connected #general | | [ ] |
+| 24 | stop the catalog (command from demo output), W1 F2 search | "The catalog service is unavailable right now", no freeze, still logged in | | [ ] |
+| 25 | start the catalog again, search again | works, backend not restarted, catalog log "seed skipped" | | [ ] |
+| 26 | Ctrl+C the demo script, start it again without deleting DBs*, log in alice | library still has One Piece 25 | | [ ] |
+| 27 | W1: Ctrl+C | terminal restored, prompt back | | [ ] |
+
+\* `demo.ps1` deletes the databases on start; for row 26 start `bin\catalog.exe` and
+`bin\backend.exe` by hand instead.
